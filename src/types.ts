@@ -18,6 +18,8 @@ export interface Agent {
   developer_id?: string;
   metadataUri?: string;
   icon?: string;
+  destinationType?: 'market_chart' | 'block_explorer';
+  network?: string;
 }
 
 export interface ExecutionLog {

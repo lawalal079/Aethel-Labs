@@ -1,9 +1,11 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { createPublicClient, http, parseAbi, decodeFunctionData, type Address } from 'viem';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { createPublicClient, http, parseAbi, decodeFunctionData, getAddress, type Address } from 'viem';
 import { User, Agent, ExecutionLog } from '../types';
 import { CircleWalletProvider, useCircleWallet } from './components/providers/CircleWalletProvider';
+import { dispatchTask } from '../services/engineClient';
+import { useMarketplaceAgents } from './hooks/useMarketplaceAgents';
 
 // ─── Chain & public client (read-only) ────────────────────────────────────────
 
@@ -21,19 +23,29 @@ const _arcChain = {
   rpcUrls: { default: { http: [_RPC_URL] }, public: { http: [_RPC_URL] } },
 } as const;
 
-const _publicClient = createPublicClient({ chain: _arcChain as any, transport: http(_RPC_URL) });
+const _publicClient = createPublicClient({
+  chain: _arcChain as any,
+  transport: http(_RPC_URL, {
+    timeout: 8_000,      // 8 s per request
+    retryCount: 2,       // retry transient failures
+    retryDelay: 500,
+  }),
+});
 
 const _MARKETPLACE_ABI = parseAbi([
-  'event AgentListed(string indexed agentId, uint256 price, string metadataUri, address indexed developer)',
+  // V2 events
+  'event AgentListed(string indexed agentId, uint256 price, uint256 stakedAmount, string metadataUri, address indexed developer, address engineWallet)',
+  // AgentApproved fires when admin approves a listing — this is the source of truth for display
+  'event AgentApproved(string indexed agentId)',
   'event AgentPurchased(address indexed buyer, string indexed agentId, uint256 totalPaid)',
-  'function marketRegistry(string) view returns (string agentId, address creator, uint256 price, bool isListed, string metadataUri)',
+  // V2 marketRegistry returns the full AgentListing struct:
+  // (agentId, creator, engineWallet, price, stakedAmount, recurringFeeBps, status, metadataUri)
+  // status is a uint8 enum: 0=PendingApproval, 1=Approved, 2=Delisted, 3=Suspended
+  'function marketRegistry(string) view returns (string agentId, address creator, address engineWallet, uint256 price, uint256 stakedAmount, uint256 recurringFeeBps, uint8 status, string metadataUri)',
 ]);
 
-const _USDC_ADDR = (process.env.NEXT_PUBLIC_USDC_ADDRESS ?? '') as Address;
-
-const _USDC_ABI = parseAbi([
-  'event Transfer(address indexed from, address indexed to, uint256 value)',
-]);
+// ABI for decoding approveAgent calldata
+const _APPROVE_ABI = parseAbi(['function approveAgent(string agentId)']);
 
 // ─── XSS-safe sanitizer ───────────────────────────────────────────────────────
 
@@ -67,6 +79,7 @@ interface AppContextType {
   activeTab: 'marketplace' | 'my-agents' | 'workflows' | 'billing';
   setActiveTab: (tab: 'marketplace' | 'my-agents' | 'workflows' | 'billing') => void;
   agents: Agent[];
+  agentsLoading: boolean;
   deployedAgentIds: string[];
   executionLogs: ExecutionLog[];
   deployAgent: (agentId: string) => Promise<boolean>;
@@ -74,13 +87,35 @@ interface AppContextType {
   topUpBalance: (amount: number) => void;
   selectedAgentForDeploy: Agent | null;
   setSelectedAgentForDeploy: (agent: Agent | null) => void;
-  runMission: (agentId: string, missionText: string) => Promise<string>;
+  runMission: (intent: string, agentType: string, txHash: string) => Promise<void>;
+  missionStatus: 'Idle' | 'Running' | 'Success' | 'Failed';
+  missionLogs: string[];
+  missionResult: string | null;
+  showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
+
+  // ── Agent Daemon status & controls ─────────────────────────────────────────
+  daemonStatus: DaemonStatusData | null;
+  isDeployingDaemon: boolean;
+  refreshDaemonStatus: () => Promise<void>;
+  startDaemonForAgent: (agentId: string) => Promise<boolean>;
+  stopDaemonForAgent: () => Promise<boolean>;
 
   // ── Wallet (read-only mirrors from wagmi via CircleWalletProvider) ─────────
   walletAddress: string | null;
   isConnected: boolean;
   usdcBalance: string;
+  walletBalance: string;
+  spendingBalance: string;
+  tradingWalletAddress: string | null;
+  tradingWalletBalance: string;
+  isTradingWalletProvisioned: boolean;
+  feeWalletAddress: string | null;
+  feeWalletBalance: string;
+  isFeeWalletProvisioned: boolean;
   refreshBalance: () => Promise<void>;
+  refreshTradingWallet: () => Promise<void>;
+  /** Re-runs the on-chain license check and updates deployedAgentIds immediately */
+  refreshLicenses: () => Promise<void>;
 }
 
 // ─── Default data ──────────────────────────────────────────────────────────────
@@ -100,348 +135,73 @@ const initialLogs: ExecutionLog[] = [];
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+export function getAgentConfig(agentId: string) {
+  const configs: Record<string, { destinationType: 'market_chart' | 'block_explorer'; network: string }> = {
+    agent_smc_alpha_executor: { destinationType: 'market_chart', network: 'arc' },
+    agent_risk_rebalancer: { destinationType: 'market_chart', network: 'arc' },
+    agent_crossdex_arb: { destinationType: 'market_chart', network: 'arc' },
+  };
+  return configs[agentId] || { destinationType: 'block_explorer', network: 'arc' };
+}
+
+export interface DaemonStatusData {
+  running: boolean;
+  userAddress?: string;
+  userRefId?: string;
+  tradingWalletAddress?: string;
+  intervalSeconds?: number;
+  startedAt?: number;
+  cycleCount?: number;
+  lastCycleAt?: number | null;
+  uptimeSeconds?: number;
+  agentId?: string;
+}
+
 function AppProviderInner({ children }: { children: React.ReactNode }) {
-  const { walletAddress, isConnected, usdcBalance: onChainBalance, refreshBalance } = useCircleWallet();
+  const { walletAddress, isConnected, usdcBalance: onChainBalance, walletBalance, spendingBalance, refreshBalance, loginResult, tradingWalletAddress, tradingWalletBalance, isTradingWalletProvisioned, feeWalletAddress, feeWalletBalance, isFeeWalletProvisioned, refreshTradingWallet } = useCircleWallet();
+  const activeUserIdentifier: string = walletAddress ?? 'anonymous';
 
   const [currentUser, setCurrentUser] = useState<User>(defaultUser);
   const [activeTab, setActiveTab] = useState<'marketplace' | 'my-agents' | 'workflows' | 'billing'>('marketplace');
-  const [agents, setAgents] = useState<Agent[]>(initialAgents);
+  // deployedAgentIds: always starts empty — source of truth is the on-chain
+  // checkLicenses useEffect below, which gates strictly on feeWalletAddress.
+  // NEVER pre-load from a walletAddress-keyed cache; that was the User-Controlled
+  // wallet's data and must have zero influence here.
   const [deployedAgentIds, setDeployedAgentIds] = useState<string[]>([]);
   const [executionLogs, setExecutionLogs] = useState<ExecutionLog[]>(initialLogs);
+  const [daemonStatus, setDaemonStatus] = useState<DaemonStatusData | null>(null);
+  const [isDeployingDaemon, setIsDeployingDaemon] = useState<boolean>(false);
 
-  // Load cached agents from localStorage on mount (synchronously sets state if found)
+
+  // On login, purge any stale walletAddress-keyed localStorage caches so they
+  // can never bleed into a future session.
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const cached = localStorage.getItem('aethel_marketplace_agents_v2');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setAgents(parsed);
-          }
-        }
-      } catch (e) {
-        console.warn('[context] Failed to load cached agents from localStorage:', e);
-      }
-    }
-  }, []);
+    if (!walletAddress || typeof window === 'undefined') return;
+    try {
+      localStorage.removeItem(`aethel_deployed_agents_${walletAddress}`);
+      localStorage.removeItem(`aethel_deployed_agents_${walletAddress.toLowerCase()}`);
+      localStorage.removeItem(`aethel_licenses_${walletAddress.toLowerCase()}`);
+    } catch { /* ignore */ }
+  }, [walletAddress]);
 
-  // ── Load live on-chain agents — full chain paginated scan ─────────────────
-  //    Optimised with Promise.all parallel chunking, background caching,
-  //    and incremental delta sync to achieve sub-second cold load times.
-  useEffect(() => {
-    if (!_PROXY_ADDR) return;
 
-    let cancelled = false;
+  // ── Agent data — delegated entirely to useMarketplaceAgents ───────────────
+  const { agents, isLoading: agentsLoading } = useMarketplaceAgents();
 
-    const loadAgents = async () => {
-      try {
-        const CHUNK_SIZE = 9500n;
-        const latestBlock = await _publicClient.getBlockNumber();
+  // ── Engine Execution States ────────────────────────────────────────────────
+  const [missionStatus, setMissionStatus] = useState<'Idle' | 'Running' | 'Success' | 'Failed'>('Idle');
+  const [missionLogs, setMissionLogs] = useState<string[]>([]);
+  const [missionResult, setMissionResult] = useState<string | null>(null);
 
-        // 1. Load cached agents and last scanned block from localStorage
-        let cachedAgents: Agent[] = [];
-        let startBlock = _DEPLOY_BLOCK;
+  // ── Toast Notification States ──────────────────────────────────────────────
+  const [toasts, setToasts] = useState<Array<{ id: string; message: string; type: 'success' | 'error' | 'info' }>>([]);
 
-        if (typeof window !== 'undefined') {
-          try {
-            const cached = localStorage.getItem('aethel_marketplace_agents_v2');
-            if (cached) {
-              const parsed = JSON.parse(cached);
-              if (Array.isArray(parsed)) {
-                cachedAgents = parsed;
-              }
-            }
-
-            const lastScanned = localStorage.getItem('aethel_marketplace_last_scanned_block_v2');
-            if (lastScanned) {
-              const parsedBlock = BigInt(lastScanned);
-              // Ensure lastScannedBlock is valid and in-bounds
-              if (parsedBlock >= _DEPLOY_BLOCK && parsedBlock <= latestBlock) {
-                startBlock = parsedBlock + 1n;
-              }
-            }
-          } catch (e) {
-            console.warn('[context] Failed to load cached state:', e);
-          }
-        }
-
-        // 2. Refresh/verify status of all cached agents in parallel (to catch updates/delistings)
-        let verifiedCached: Agent[] = [];
-        if (cachedAgents.length > 0) {
-          const verifyPromises = cachedAgents.map(async (agent) => {
-            try {
-              const entry = await _publicClient.readContract({
-                address: _PROXY_ADDR,
-                abi: _MARKETPLACE_ABI,
-                functionName: 'marketRegistry',
-                args: [agent.id],
-              }) as readonly [string, Address, bigint, boolean, string];
-
-              const [agentId, , price, isListed, metadataUri] = entry;
-              if (!isListed || agentId === "") return null;
-
-              let title = agentId;
-              let description = '';
-              let icon = '';
-              try {
-                const parsed = JSON.parse(metadataUri);
-                title = sanitizeString(parsed.title ?? agentId);
-                description = sanitizeString(parsed.description ?? '');
-                icon = sanitizeString(parsed.icon ?? '');
-              } catch {
-                title = sanitizeString(metadataUri || agentId);
-              }
-
-              return {
-                ...agent,
-                name: title,
-                description: description,
-                usdc_price: Number(price) / 1_000_000,
-                tags: [icon].filter(Boolean),
-                category: icon || 'General',
-                metadataUri: sanitizeString(metadataUri),
-              };
-            } catch (err) {
-              // RPC failed — return cached version to prevent UI flicker
-              return agent;
-            }
-          });
-
-          const verifiedResults = await Promise.all(verifyPromises);
-          verifiedCached = verifiedResults.filter((a): a is Agent => a !== null);
-        }
-
-        // 3. Scan for NEW listings in sequential batches (3 chunks at a time)
-        // Running all chunks in parallel overwhelms the ARC testnet RPC which
-        // rate-limits concurrent requests, causing some chunks to silently return [].
-        const newLogs: any[] = [];
-        if (startBlock <= latestBlock) {
-          const chunks: Array<[bigint, bigint]> = [];
-          for (let chunkStart = startBlock; chunkStart <= latestBlock; chunkStart += CHUNK_SIZE) {
-            const chunkEnd = chunkStart + CHUNK_SIZE - 1n < latestBlock
-              ? chunkStart + CHUNK_SIZE - 1n
-              : latestBlock;
-            chunks.push([chunkStart, chunkEnd]);
-          }
-
-          // Process 3 chunks at a time to stay within RPC rate limits
-          const BATCH_SIZE = 3;
-          for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-            const batch = chunks.slice(i, i + BATCH_SIZE);
-            const batchResults = await Promise.all(
-              batch.map(([from, to]) =>
-                _publicClient.getLogs({
-                  address: _PROXY_ADDR,
-                  event: _MARKETPLACE_ABI[0] as any,
-                  fromBlock: from,
-                  toBlock: to,
-                }).catch(err => {
-                  console.warn(`[context] Failed to scan range ${from} - ${to}:`, err);
-                  return [] as any[];
-                })
-              )
-            );
-            newLogs.push(...batchResults.flat());
-          }
-        }
-
-        if (cancelled) return;
-
-        // 4. Resolve details for all newly discovered logs in parallel
-        const seenIds = new Set<string>(verifiedCached.map(a => a.id));
-        const resolvedNew: Agent[] = [];
-
-        if (newLogs.length > 0) {
-          const resolvePromises = newLogs.map(async (log) => {
-            const args = (log as any).args as {
-              agentId: string;
-              price: bigint;
-              metadataUri: string;
-              developer: Address;
-            };
-            if (!args?.agentId) return null;
-
-            const topicIdHash = args.agentId;
-
-            try {
-              let targetId = topicIdHash;
-              if (topicIdHash.startsWith('0x') && topicIdHash.length === 66) {
-                try {
-                  const tx = await _publicClient.getTransaction({ hash: log.transactionHash });
-                  const coderAbi = parseAbi(['function listAgent(string agentId, uint256 price, string metadataUri)']);
-                  const { args: decodedArgs } = decodeFunctionData({
-                    abi: coderAbi,
-                    data: tx.input
-                  });
-                  if (decodedArgs && decodedArgs[0]) {
-                    targetId = decodedArgs[0] as string;
-                  }
-                } catch {
-                  // Fallback decoding
-                }
-              }
-
-              if (seenIds.has(targetId)) return null;
-
-              const entry = await _publicClient.readContract({
-                address: _PROXY_ADDR,
-                abi: _MARKETPLACE_ABI,
-                functionName: 'marketRegistry',
-                args: [targetId],
-              }) as readonly [string, Address, bigint, boolean, string];
-
-              const [agentId, , price, isListed, metadataUri] = entry;
-              if (!isListed || agentId === "") return null;
-
-              let title = agentId;
-              let description = '';
-              let icon = '';
-              try {
-                const parsed = JSON.parse(metadataUri);
-                title = sanitizeString(parsed.title ?? agentId);
-                description = sanitizeString(parsed.description ?? '');
-                icon = sanitizeString(parsed.icon ?? '');
-              } catch {
-                title = sanitizeString(metadataUri || agentId);
-              }
-
-              return {
-                id: sanitizeString(targetId),
-                name: title,
-                description: description,
-                usdc_price: Number(price) / 1_000_000,
-                rating: 4.8,
-                review_count: 0,
-                tags: [icon].filter(Boolean),
-                category: icon || 'General',
-                metadataUri: sanitizeString(metadataUri),
-              };
-            } catch (err) {
-              return null;
-            }
-          });
-
-          const resolvedResults = await Promise.all(resolvePromises);
-          for (const agent of resolvedResults) {
-            if (agent && !seenIds.has(agent.id)) {
-              seenIds.add(agent.id);
-              resolvedNew.push(agent);
-            }
-          }
-        }
-
-        if (cancelled) return;
-
-        // 5. Merge, update state, and save to cache
-        const finalAgents = [...verifiedCached, ...resolvedNew];
-        setAgents(finalAgents);
-
-        if (typeof window !== 'undefined') {
-          try {
-            localStorage.setItem('aethel_marketplace_agents_v2', JSON.stringify(finalAgents));
-            localStorage.setItem('aethel_marketplace_last_scanned_block_v2', latestBlock.toString());
-          } catch (e) {
-            console.warn('[context] Failed to save state to localStorage:', e);
-          }
-        }
-      } catch (err) {
-        console.warn('[context] Failed to load on-chain agents:', err);
-      }
-    };
-
-    void loadAgents();
-    return () => { cancelled = true; };
-  }, []);
-
-  // ── Real-time watcher: pick up any AgentListed event from any dev instantly ─
-  //    The paginated crawl covers history; this covers the present and future.
-  //    When a new agent is listed while the marketplace is open, it streams in
-  //    without requiring a page refresh.
-  useEffect(() => {
-    if (!_PROXY_ADDR) return;
-
-    const unwatch = _publicClient.watchContractEvent({
-      address: _PROXY_ADDR,
-      abi: _MARKETPLACE_ABI,
-      eventName: 'AgentListed',
-      onLogs: async (logs) => {
-        for (const log of logs) {
-          const { agentId } = (log as any).args as { agentId: string };
-          if (!agentId) continue;
-          try {
-            let targetId = agentId;
-            if (agentId.startsWith('0x') && agentId.length === 66) {
-              try {
-                const tx = await _publicClient.getTransaction({ hash: log.transactionHash });
-                const coderAbi = parseAbi(['function listAgent(string agentId, uint256 price, string metadataUri)']);
-                const { args: decodedArgs } = decodeFunctionData({
-                  abi: coderAbi,
-                  data: tx.input
-                });
-                if (decodedArgs && decodedArgs[0]) {
-                  targetId = decodedArgs[0] as string;
-                }
-              } catch {
-                // Decoding failed — targetId stays as hash, agent will be skipped.
-              }
-            }
-
-            const entry = await _publicClient.readContract({
-              address: _PROXY_ADDR,
-              abi: _MARKETPLACE_ABI,
-              functionName: 'marketRegistry',
-              args: [targetId],
-            }) as readonly [string, Address, bigint, boolean, string];
-
-            const [id, , price, isListed, metadataUri] = entry;
-            if (!isListed) continue;
-
-            let title = id;
-            let description = '';
-            let icon = '';
-            try {
-              const parsed = JSON.parse(metadataUri);
-              title = sanitizeString(parsed.title ?? id);
-              description = sanitizeString(parsed.description ?? '');
-              icon = sanitizeString(parsed.icon ?? '');
-            } catch {
-              title = sanitizeString(metadataUri || id);
-            }
-
-            const newAgent: Agent = {
-              id: sanitizeString(targetId),
-              name: title,
-              description: description,
-              usdc_price: Number(price) / 1_000_000,
-              rating: 4.8,
-              review_count: 0,
-              tags: [icon].filter(Boolean),
-              category: icon || 'General',
-              metadataUri: sanitizeString(metadataUri),
-            };
-
-            // Append only if not already present (dedup guard) and save to cache
-            setAgents(prev => {
-              if (prev.some(a => a.id === newAgent.id)) return prev;
-              const nextAgents = [...prev, newAgent];
-              if (typeof window !== 'undefined') {
-                try {
-                  localStorage.setItem('aethel_marketplace_agents', JSON.stringify(nextAgents));
-                } catch (e) {
-                  console.warn('[context] Failed to write new agent to localStorage:', e);
-                }
-              }
-              return nextAgents;
-            });
-          } catch {
-            // readContract failed — skip this agent
-          }
-        }
-      },
-    });
-
-    return () => { unwatch(); };
+  const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4500);
   }, []);
 
   // ── Load live on-chain user transaction logs ───────────────────────────────
@@ -472,29 +232,47 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
       try {
         const currentAddress = walletAddress as Address;
         const CHUNK_SIZE = 9500n;
-        const latestBlock = await _publicClient.getBlockNumber();
 
-        // 1. Fetch AgentPurchased logs for this user as buyer
+        // ── Priority gate ──────────────────────────────────────────────────────
+        // Delay this scan so balance reads (fetchUsdcBalance + fetchGatewayBalance)
+        // get their eth_call slots before the getLogs storm starts.
+        // Arc testnet's RPC rate-limits concurrent requests across all call types;
+        // without this delay the log scan exhausts the quota and fetchGatewayBalance
+        // fails immediately, showing 0.00 even when funds are present.
+        await new Promise(res => setTimeout(res, 5_000));
+        if (cancelled) return;
+
+        const latestBlock = await _publicClient.getBlockNumber();
+        // Limit scan range to recent 10,000 blocks (~1 chunk) to prevent RPC rate-limits
+        const scanStart = latestBlock > 10000n ? latestBlock - 10000n : 0n;
+
+        /** Throttle helper — 250ms gap between getLogs chunks to stay within RPC rate limits */
+        const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+        // 1. Fetch AgentPurchased logs — buyer is the Fee Wallet
+        if (!feeWalletAddress) return;
+        const buyerToMatch = feeWalletAddress as Address;
         const purchaseLogs: any[] = [];
-        for (let chunkStart = _DEPLOY_BLOCK; chunkStart <= latestBlock; chunkStart += CHUNK_SIZE) {
+        for (let chunkStart = scanStart; chunkStart <= latestBlock; chunkStart += CHUNK_SIZE) {
           const chunkEnd = chunkStart + CHUNK_SIZE - 1n < latestBlock ? chunkStart + CHUNK_SIZE - 1n : latestBlock;
           try {
             const chunk = await _publicClient.getLogs({
               address: _PROXY_ADDR,
               event: _MARKETPLACE_ABI[1] as any, // AgentPurchased
-              args: { buyer: currentAddress },
+              args: { buyer: buyerToMatch },
               fromBlock: chunkStart,
               toBlock: chunkEnd,
             });
             purchaseLogs.push(...chunk);
           } catch (e) {
-            console.warn('[context] purchase logs fetch failed for chunk:', chunkStart, e);
+            console.warn('[context] purchase logs fetch failed for chunk:', chunkStart);
           }
+          await sleep(250); // throttle between chunks
         }
 
         // 2. Fetch AgentListed logs for this user as developer
         const listingLogs: any[] = [];
-        for (let chunkStart = _DEPLOY_BLOCK; chunkStart <= latestBlock; chunkStart += CHUNK_SIZE) {
+        for (let chunkStart = scanStart; chunkStart <= latestBlock; chunkStart += CHUNK_SIZE) {
           const chunkEnd = chunkStart + CHUNK_SIZE - 1n < latestBlock ? chunkStart + CHUNK_SIZE - 1n : latestBlock;
           try {
             const chunk = await _publicClient.getLogs({
@@ -506,45 +284,9 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
             });
             listingLogs.push(...chunk);
           } catch (e) {
-            console.warn('[context] listing logs fetch failed for chunk:', chunkStart, e);
+            console.warn('[context] listing logs fetch failed for chunk:', chunkStart);
           }
-        }
-
-        // 3. Fetch USDC Transfer logs:
-        // A. From this user (Outgoing compute credit deposits to the marketplace contract)
-        const transferFromLogs: any[] = [];
-        for (let chunkStart = _DEPLOY_BLOCK; chunkStart <= latestBlock; chunkStart += CHUNK_SIZE) {
-          const chunkEnd = chunkStart + CHUNK_SIZE - 1n < latestBlock ? chunkStart + CHUNK_SIZE - 1n : latestBlock;
-          try {
-            const chunk = await _publicClient.getLogs({
-              address: _USDC_ADDR,
-              event: _USDC_ABI[0] as any, // Transfer
-              args: { from: currentAddress, to: _PROXY_ADDR },
-              fromBlock: chunkStart,
-              toBlock: chunkEnd,
-            });
-            transferFromLogs.push(...chunk);
-          } catch (e) {
-            console.warn('[context] transferFrom logs fetch failed for chunk:', chunkStart, e);
-          }
-        }
-
-        // B. To this user (Incoming split payments or payouts from the marketplace contract)
-        const transferToLogs: any[] = [];
-        for (let chunkStart = _DEPLOY_BLOCK; chunkStart <= latestBlock; chunkStart += CHUNK_SIZE) {
-          const chunkEnd = chunkStart + CHUNK_SIZE - 1n < latestBlock ? chunkStart + CHUNK_SIZE - 1n : latestBlock;
-          try {
-            const chunk = await _publicClient.getLogs({
-              address: _USDC_ADDR,
-              event: _USDC_ABI[0] as any, // Transfer
-              args: { from: _PROXY_ADDR, to: currentAddress },
-              fromBlock: chunkStart,
-              toBlock: chunkEnd,
-            });
-            transferToLogs.push(...chunk);
-          } catch (e) {
-            console.warn('[context] transferTo logs fetch failed for chunk:', chunkStart, e);
-          }
+          await sleep(250); // throttle between chunks
         }
 
         if (cancelled) return;
@@ -575,12 +317,6 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
         }
         for (const log of listingLogs) {
           getOrCreateTx(log).listingEvent = log;
-        }
-        for (const log of transferFromLogs) {
-          getOrCreateTx(log).transfers.push(log);
-        }
-        for (const log of transferToLogs) {
-          getOrCreateTx(log).transfers.push(log);
         }
 
         // Now, resolve block timestamps for the unique transactions.
@@ -616,6 +352,11 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
 
             const matchedAgent = agents.find(a => a.id === agentId);
             const agentName = matchedAgent ? matchedAgent.name : agentId;
+
+            // Purchased event on-chain proves ownership — add to deployedAgentIds
+            if (agentId) {
+              setDeployedAgentIds(prev => prev.includes(agentId) ? prev : [...prev, agentId]);
+            }
 
             realLogs.push({
               id: `tx_${tx.hash.slice(2, 10)}`,
@@ -688,7 +429,8 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
       onLogs: async (logs) => {
         for (const log of logs) {
           const { buyer, agentId, totalPaid } = (log as any).args;
-          if (buyer.toLowerCase() !== walletAddress.toLowerCase()) continue;
+          // Purchases come from the Fee Wallet address.
+          if (!feeWalletAddress || buyer.toLowerCase() !== feeWalletAddress.toLowerCase()) continue;
           
           let blockTimestamp = Math.floor(Date.now() / 1000);
           try {
@@ -760,32 +502,64 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
       unwatchPurchases();
       unwatchListings();
     };
-  }, [walletAddress, agents]);
+  }, [walletAddress, feeWalletAddress, agents]);
+
 
   const [selectedAgentForDeploy, setSelectedAgentForDeploy] = useState<Agent | null>(null);
 
-  // Sync live on-chain balance into currentUser
+  // Sync live Fee Wallet balance into currentUser
   useEffect(() => {
-    if (isConnected && onChainBalance !== '0.00') {
-      const parsed = parseFloat(onChainBalance);
+    if (feeWalletBalance && feeWalletBalance !== '0.00') {
+      const parsed = parseFloat(feeWalletBalance);
       if (!isNaN(parsed)) {
-        setCurrentUser(prev => ({ ...prev, usdc_account_balance: parsed, wallet_type: 'EOA' }));
+        setCurrentUser(prev => ({ ...prev, usdc_account_balance: parsed, wallet_type: 'CIRCLE' }));
       }
+    } else {
+      setCurrentUser(prev => ({ ...prev, usdc_account_balance: 0.00, wallet_type: 'CIRCLE' }));
     }
-  }, [isConnected, onChainBalance]);
+  }, [feeWalletBalance]);
 
-  useEffect(() => {
-    if (!isConnected) {
-      setCurrentUser(prev => ({ ...prev, wallet_type: 'CIRCLE' }));
-    }
-  }, [isConnected]);
+  const displayUsdcBalance = feeWalletBalance
+    ? parseFloat(feeWalletBalance).toFixed(2)
+    : '0.00';
+
+
 
   // ── Hydrate deployedAgentIds from on-chain license state ────────────────────
-  // Runs whenever the wallet address or the agent list changes, so purchased
-  // agents are always visible even after a page refresh.
+  // 1. Load from localStorage instantly (zero-flicker on refresh)
+  // 2. Verify on-chain in background — update cache only on success
+  // 3. On RPC failure, keep cached IDs so bought agents remain visible
+
+  // Stable ref updated by the useEffect below so refreshLicenses can call it imperatively.
+  const checkLicensesRef = React.useRef<(() => Promise<void>) | null>(null);
+
   useEffect(() => {
-    if (!walletAddress || !_PROXY_ADDR || agents.length === 0) return;
+    // CRITICAL: MUST wait for feeWalletAddress to resolve — licenses are issued to Fee Wallet.
+    // If feeWalletAddress is null (still loading), do NOT run checkLicenses with walletAddress fallback,
+    // as querying userLicenses against the User-Controlled wallet returns false and overwrites cache with empty [].
+    const targetWallet = feeWalletAddress || walletAddress;
+    if (!targetWallet || !_PROXY_ADDR || agents.length === 0) return;
     let cancelled = false;
+
+    // ── Instant cache hydration ──────────────────────────────────────────────
+    const cacheKey = `aethel_licenses_${targetWallet.toLowerCase()}`;
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) {
+          const cached: string[] = JSON.parse(raw);
+          if (Array.isArray(cached) && cached.length > 0) {
+            setDeployedAgentIds(prev => {
+              const merged = [...prev];
+              for (const id of cached) {
+                if (!merged.includes(id)) merged.push(id);
+              }
+              return merged;
+            });
+          }
+        }
+      } catch { /* ignore */ }
+    }
 
     const checkLicenses = async () => {
       const _LICENSE_ABI = [
@@ -798,35 +572,199 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
         },
       ] as const;
 
+      const results = await Promise.allSettled(
+        agents.map(async (agent) => {
+          try {
+            // Check Fee Wallet address
+            let has = await _publicClient.readContract({
+              address: _PROXY_ADDR,
+              abi: _LICENSE_ABI,
+              functionName: 'userLicenses',
+              args: [targetWallet as Address, agent.id],
+            }) as boolean;
+
+            // Fallback: check User-Controlled wallet address if different
+            if (!has && walletAddress && walletAddress !== targetWallet) {
+              has = await _publicClient.readContract({
+                address: _PROXY_ADDR,
+                abi: _LICENSE_ABI,
+                functionName: 'userLicenses',
+                args: [walletAddress as Address, agent.id],
+              }) as boolean;
+            }
+
+            return { agentId: agent.id, has };
+          } catch {
+            return { agentId: agent.id, has: false };
+          }
+        })
+      );
+
       const licensed: string[] = [];
-      for (const agent of agents) {
-        try {
-          const has = await _publicClient.readContract({
-            address: _PROXY_ADDR,
-            abi: _LICENSE_ABI,
-            functionName: 'userLicenses',
-            args: [walletAddress as Address, agent.id],
-          }) as boolean;
-          if (has) licensed.push(agent.id);
-        } catch {
-          // skip on RPC error
+      let anySuccess = false;
+      results.forEach(res => {
+        if (res.status === 'fulfilled') {
+          anySuccess = true;
+          if (res.value.has) licensed.push(res.value.agentId);
+        }
+      });
+
+      if (!cancelled && anySuccess) {
+        // Strictly set deployedAgentIds state to match on-chain active licenses
+        setDeployedAgentIds(licensed);
+        // Persist fresh on-chain license array to localStorage
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem(cacheKey, JSON.stringify(licensed));
+          } catch { /* ignore */ }
         }
       }
 
-      if (!cancelled && licensed.length > 0) {
-        setDeployedAgentIds(prev => {
-          const merged = [...prev];
-          for (const id of licensed) {
-            if (!merged.includes(id)) merged.push(id);
-          }
-          return merged;
-        });
-      }
     };
+
+    // Store a stable ref so refreshLicenses can call it imperatively
+    checkLicensesRef.current = checkLicenses;
 
     void checkLicenses();
     return () => { cancelled = true; };
-  }, [walletAddress, agents]);
+  }, [feeWalletAddress, walletAddress, agents]);
+
+
+
+  // ── Imperative license refresh (callable from marketplace after purchase) ──
+  const refreshLicenses = useCallback(async () => {
+    if (checkLicensesRef.current) {
+      await checkLicensesRef.current();
+    }
+  }, []);
+
+  // ── Daemon Status Polling & Daemon Controls ────────────────────────────────
+  const refreshDaemonStatus = useCallback(async () => {
+    if (!walletAddress) {
+      setDaemonStatus(null);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/agents/deploy?userAddress=${encodeURIComponent(walletAddress)}`);
+      if (!res.ok) return;
+      const data: DaemonStatusData = await res.json();
+      setDaemonStatus(data);
+      if (data.running && data.agentId) {
+        setDeployedAgentIds(prev => prev.includes(data.agentId!) ? prev : [...prev, data.agentId!]);
+      }
+    } catch (err) {
+      console.warn('[context] refreshDaemonStatus failed:', err);
+    }
+  }, [walletAddress]);
+
+  useEffect(() => {
+    if (isConnected && walletAddress) {
+      void refreshDaemonStatus();
+      const interval = setInterval(() => void refreshDaemonStatus(), 10_000);
+      return () => clearInterval(interval);
+    } else {
+      setDaemonStatus(null);
+    }
+  }, [isConnected, walletAddress, refreshDaemonStatus]);
+
+  // ── Fetch Real Transaction Ledger ──────────────────────────────────────────
+  const fetchTransactions = useCallback(async () => {
+    const targetAddr = feeWalletAddress || walletAddress;
+    try {
+      const res = await fetch(`/api/agents/transactions?userAddress=${encodeURIComponent(targetAddr || '')}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.transactions)) {
+        const mappedLogs: ExecutionLog[] = data.transactions.map((t: any) => ({
+          id: t.id,
+          agent_id: t.agentId || 'system',
+          agent_name: (t.agentName || 'Agent Task').replace(/_/g, ' '),
+          timestamp: t.timestamp ? new Date(t.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleString(),
+          status: t.status || 'SUCCESS',
+          tx_type: t.txType || 'Nanopayment',
+          cost_usdc: t.amountUsdc || 0,
+          tx_hash: t.txHash || t.id,
+        }));
+        setExecutionLogs(mappedLogs);
+      }
+    } catch (err) {
+      console.warn('[context] fetchTransactions failed:', err);
+    }
+  }, [walletAddress, feeWalletAddress]);
+
+  useEffect(() => {
+    void fetchTransactions();
+    const interval = setInterval(() => void fetchTransactions(), 15_000);
+    return () => clearInterval(interval);
+  }, [fetchTransactions]);
+
+  const startDaemonForAgent = useCallback(async (agentId: string): Promise<boolean> => {
+    if (!walletAddress || !loginResult?.userToken) {
+      showToast('Wallet or Circle session not active.', 'error');
+      return false;
+    }
+    setIsDeployingDaemon(true);
+    try {
+      const res = await fetch('/api/agents/deploy', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${loginResult.userToken}`,
+        },
+        body: JSON.stringify({
+          userAddress: walletAddress,
+          // Pass Fee Wallet address so the Layer-1 license check targets the right address.
+          // Licenses are now issued to the Fee Wallet (not the User-Controlled wallet).
+          feeWalletAddress: feeWalletAddress ?? null,
+          agentId,
+          intervalSeconds: 60,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || 'Failed to start daemon');
+      }
+      setDeployedAgentIds(prev => prev.includes(agentId) ? prev : [...prev, agentId]);
+      showToast('Agent daemon started successfully!', 'success');
+      await refreshDaemonStatus();
+      return true;
+    } catch (err: any) {
+      console.error('[context] startDaemonForAgent error:', err);
+      showToast(err.message || 'Failed to start daemon', 'error');
+      return false;
+    } finally {
+      setIsDeployingDaemon(false);
+    }
+  }, [walletAddress, feeWalletAddress, loginResult, refreshDaemonStatus, showToast]);
+
+
+
+  const stopDaemonForAgent = useCallback(async (): Promise<boolean> => {
+    if (!walletAddress || !loginResult?.userToken) {
+      showToast('Wallet or Circle session not active.', 'error');
+      return false;
+    }
+    try {
+      const res = await fetch('/api/agents/deploy', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${loginResult.userToken}`,
+        },
+      });
+      const data = await res.json();
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || 'Failed to stop daemon');
+      }
+      showToast('Agent daemon stopped.', 'info');
+      await refreshDaemonStatus();
+      return true;
+    } catch (err: any) {
+      console.error('[context] stopDaemonForAgent error:', err);
+      showToast(err.message || 'Failed to stop daemon', 'error');
+      return false;
+    }
+  }, [walletAddress, loginResult, refreshDaemonStatus, showToast]);
 
 
 
@@ -854,7 +792,7 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
       status: 'SUCCESS',
       tx_type: 'Deployment',
       cost_usdc: targetAgent.usdc_price,
-      tx_hash: '0x' + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join(''),
+      tx_hash: '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(''),  // 32-byte placeholder
     };
 
     setExecutionLogs(prev => [newLog, ...prev]);
@@ -881,19 +819,100 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
       status: 'SUCCESS',
       tx_type: 'Deployment',
       cost_usdc: targetAgent.usdc_price,
-      tx_hash: txHash ?? ('0x' + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join('')),
+      tx_hash: txHash ?? ('0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')),  // 32-byte placeholder
     };
 
     setExecutionLogs(prev => [newLog, ...prev]);
     setDeployedAgentIds(prev => prev.includes(agentId) ? prev : [...prev, agentId]);
   };
 
-  const runMission = async (_agentId: string, _missionText: string): Promise<string> => {
+  const startPollingLogs = (txHash: string) => {
+    const engineUrl = process.env.NEXT_PUBLIC_ENGINE_URL || 'http://localhost:4000';
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts++;
+      if (attempts > 100) {
+        clearInterval(interval);
+        setMissionStatus('Failed');
+        setMissionLogs(prev => [...prev, '[Client] Polling timed out. Engine did not return result.']);
+        showToast('Engine execution polling timed out.', 'error');
+        return;
+      }
+
+      try {
+        const response = await fetch(`${engineUrl}/status?txHash=${txHash}`);
+        if (!response.ok) {
+          if (response.status === 500) {
+            clearInterval(interval);
+            setMissionStatus('Failed');
+            setMissionLogs(prev => [...prev, '[Client] Fatal error: Engine encountered a 500 Internal Server Error.']);
+            showToast('Engine returned 500 Internal Server Error.', 'error');
+            return;
+          }
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json() as {
+          status: 'Running' | 'Success' | 'Failed';
+          logs: string[];
+          result?: string;
+          error?: string;
+        };
+
+        if (data.logs) {
+          setMissionLogs(data.logs);
+        }
+
+        if (data.status === 'Success') {
+          clearInterval(interval);
+          setMissionStatus('Success');
+          setMissionResult(data.result ?? 'Success');
+        } else if (data.status === 'Failed') {
+          clearInterval(interval);
+          setMissionStatus('Failed');
+          setMissionResult(data.error ?? 'Execution failed');
+          showToast(`Execution failed: ${data.error}`, 'error');
+        }
+      } catch (err) {
+        console.warn('[context] Polling logs error:', err);
+      }
+    }, 1500);
+  };
+
+  const runMission = async (intent: string, agentType: string, txHash: string): Promise<void> => {
+    // Deduct computational gas fee locally
     setCurrentUser(prev => ({
       ...prev,
       usdc_account_balance: parseFloat((prev.usdc_account_balance - 0.05).toFixed(4)),
     }));
-    return new Promise(resolve => setTimeout(() => resolve('Success'), 2000));
+
+    setMissionStatus('Running');
+    setMissionLogs([`[Client] Dispatching intent task to engine for agent: ${agentType}...`]);
+    setMissionResult(null);
+
+    try {
+      // Forward the live compound identity — resolves both Privy and Circle sessions
+      const res = await dispatchTask(intent, agentType, txHash, walletAddress || undefined, activeUserIdentifier);
+      
+      if (res.success && res.status === 'dispatching') {
+        setMissionLogs(prev => [...prev, `[Client] Payment verified successfully. Task is dispatching on-chain.`, `[Client] Starting live telemetry polling...`]);
+        startPollingLogs(txHash);
+      } else if (res.success) {
+        setMissionStatus('Success');
+        setMissionResult(res.result ?? 'Success');
+        setMissionLogs(prev => [...prev, `[Client] Execution completed successfully.`]);
+      } else {
+        setMissionStatus('Failed');
+        const errText = res.error || 'Unknown engine error';
+        setMissionLogs(prev => [...prev, `[Client] Dispatch failed: ${errText}`]);
+        showToast(errText, 'error');
+      }
+    } catch (err: any) {
+      setMissionStatus('Failed');
+      const errString = err.message || String(err);
+      setMissionLogs(prev => [...prev, `[Client] Network error: ${errString}`]);
+      showToast(`Network error: ${errString}`, 'error');
+    }
   };
 
   const topUpBalance = (amount: number) => {
@@ -903,10 +922,7 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
     }));
   };
 
-  const displayUsdcBalance =
-    isConnected
-      ? onChainBalance
-      : currentUser.usdc_account_balance.toFixed(2);
+
 
   return (
     <AppContext.Provider
@@ -916,6 +932,7 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
         activeTab,
         setActiveTab,
         agents,
+        agentsLoading,
         deployedAgentIds,
         executionLogs,
         deployAgent,
@@ -924,13 +941,58 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
         selectedAgentForDeploy,
         setSelectedAgentForDeploy,
         runMission,
+        missionStatus,
+        missionLogs,
+        missionResult,
+        showToast,
         walletAddress,
         isConnected,
         usdcBalance: displayUsdcBalance,
+        walletBalance: isConnected ? walletBalance : currentUser.usdc_account_balance.toFixed(2),
+        spendingBalance: isConnected ? spendingBalance : '0.00',
+        tradingWalletAddress,
+        tradingWalletBalance,
+        isTradingWalletProvisioned,
+        feeWalletAddress,
+        feeWalletBalance,
+        isFeeWalletProvisioned,
         refreshBalance,
+        refreshTradingWallet,
+        daemonStatus,
+        isDeployingDaemon,
+        refreshDaemonStatus,
+        startDaemonForAgent,
+        stopDaemonForAgent,
+        refreshLicenses,
       }}
     >
       {children}
+
+      {/* Modern Fixed Toast Notifications */}
+      <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 pointer-events-none max-w-sm w-full">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`pointer-events-auto flex items-start justify-between gap-3 px-4 py-3 rounded-lg shadow-xl border text-xs font-semibold backdrop-blur-md transition-all duration-300 transform translate-y-0 animate-fadeIn ${
+              toast.type === 'error'
+                ? 'bg-[#1a0e0e]/95 border-[#e05252]/20 text-[#ff8080]'
+                : toast.type === 'success'
+                ? 'bg-[#0e1a12]/95 border-[#52e070]/20 text-[#80ff9a]'
+                : 'bg-[#0e121a]/95 border-[#529ae0]/20 text-[#80beff]'
+            }`}
+          >
+            <div className="flex-1 select-none pr-2 leading-normal">
+              {toast.message}
+            </div>
+            <button
+              onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+              className="text-[#8a8f98] hover:text-white font-bold font-mono text-[14px] leading-none select-none focus:outline-none cursor-pointer"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
     </AppContext.Provider>
   );
 }

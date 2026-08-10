@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useApp } from './context';
 import {
   Upload, CheckCircle, Gear, Coins, Star, ChartLine, FileText, Code,
@@ -17,17 +17,16 @@ import {
   type Chain,
   encodeFunctionData,
 } from 'viem';
-import { useWallets } from '@privy-io/react-auth';
 import { useCircleWallet } from './components/providers/CircleWalletProvider';
 import { Agent } from '../types';
 
 // ─── Chain & Contract constants ────────────────────────────────────────────────
 
-const CHAIN_ID   = parseInt(process.env.NEXT_PUBLIC_CHAIN_ID ?? '5042002', 10);
-const RPC_URL    = process.env.NEXT_PUBLIC_RPC_URL ?? 'https://rpc.testnet.arc.network';
+const CHAIN_ID = parseInt(process.env.NEXT_PUBLIC_CHAIN_ID ?? '5042002', 10);
+const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? 'https://rpc.testnet.arc.network';
 const CHAIN_NAME = process.env.NEXT_PUBLIC_CHAIN_NAME ?? 'Arc Testnet';
 const PROXY_ADDR = (process.env.NEXT_PUBLIC_MARKETPLACE_ADDRESS ?? '') as Address;
-const USDC_ADDR  = (process.env.NEXT_PUBLIC_USDC_ADDRESS ?? '') as Address;
+const USDC_ADDR = (process.env.NEXT_PUBLIC_USDC_ADDRESS ?? '') as Address;
 
 const arcTestnet: Chain = {
   id: CHAIN_ID,
@@ -35,7 +34,7 @@ const arcTestnet: Chain = {
   nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 6 },
   rpcUrls: {
     default: { http: [RPC_URL] },
-    public:  { http: [RPC_URL] },
+    public: { http: [RPC_URL] },
   },
 };
 
@@ -56,43 +55,86 @@ const MARKETPLACE_ABI = parseAbi([
 const getAgentIcon = (id: string, iconName?: string) => {
   // Resolve icon from on-chain metadata name first (populated by context.tsx from metadataUri JSON)
   switch (iconName) {
-    case 'TrendingUp':  return <TrendUp     size={24} className="text-[#4E8981]" />;
-    case 'TrendUp':     return <TrendUp     size={24} className="text-[#4E8981]" />;
-    case 'ChartLine':   return <ChartLine   size={24} className="text-[#4E8981]" />;
-    case 'FileText':    return <FileText    size={24} className="text-[#4E8981]" />;
-    case 'Code':        return <Code        size={24} className="text-[#4E8981]" />;
-    case 'Translate':   return <Translate   size={24} className="text-[#4E8981]" />;
-    case 'Image':       return <ImageIcon   size={24} className="text-[#4E8981]" />;
+    case 'TrendingUp': return <TrendUp size={24} className="text-[#4E8981]" />;
+    case 'TrendUp': return <TrendUp size={24} className="text-[#4E8981]" />;
+    case 'ChartLine': return <ChartLine size={24} className="text-[#4E8981]" />;
+    case 'FileText': return <FileText size={24} className="text-[#4E8981]" />;
+    case 'Code': return <Code size={24} className="text-[#4E8981]" />;
+    case 'Translate': return <Translate size={24} className="text-[#4E8981]" />;
+    case 'Image': return <ImageIcon size={24} className="text-[#4E8981]" />;
     case 'ShieldCheck': return <ShieldCheck size={24} className="text-[#4E8981]" />;
-    case 'Gear':        return <Gear        size={24} className="text-[#4E8981]" />;
+    case 'Gear': return <Gear size={24} className="text-[#4E8981]" />;
   }
   // Fallback: legacy ID-based mapping for agents without metadata icons
   switch (id) {
-    case 'agent_data_analysis':    return <ChartLine   size={24} className="text-[#4E8981]" />;
-    case 'agent_content_writing':  return <FileText    size={24} className="text-[#4E8981]" />;
-    case 'agent_python_coding':    return <Code        size={24} className="text-[#4E8981]" />;
-    case 'agent_lang_translation': return <Translate   size={24} className="text-[#4E8981]" />;
-    case 'agent_image_gen':        return <ImageIcon   size={24} className="text-[#4E8981]" />;
-    case 'agent_ai_moderation':    return <ShieldCheck size={24} className="text-[#4E8981]" />;
-    default:                       return <Gear        size={24} className="text-[#4E8981]" />;
+    case 'agent_data_analysis': return <ChartLine size={24} className="text-[#4E8981]" />;
+    case 'agent_content_writing': return <FileText size={24} className="text-[#4E8981]" />;
+    case 'agent_python_coding': return <Code size={24} className="text-[#4E8981]" />;
+    case 'agent_lang_translation': return <Translate size={24} className="text-[#4E8981]" />;
+    case 'agent_image_gen': return <ImageIcon size={24} className="text-[#4E8981]" />;
+    case 'agent_ai_moderation': return <ShieldCheck size={24} className="text-[#4E8981]" />;
+    default: return <Gear size={24} className="text-[#4E8981]" />;
   }
 };
 
 const DISPLAY_MAP: Record<string, { name: string; desc: string; price: string; reviews: string; rating: number; reviewsBottom: string }> = {
-  agent_data_analysis:    { name: 'Data Analysis',       desc: 'Monitor data',            price: '3.000 USDC', reviews: '253 reviews', rating: 4.7,  reviewsBottom: '276 reviews' },
-  agent_content_writing:  { name: 'Content Writing',     desc: 'Analyze script writing',  price: '4.50 USDC',  reviews: '492 reviews', rating: 4.7,  reviewsBottom: '492 reviews' },
-  agent_python_coding:    { name: 'Python Coding',       desc: 'Analyze smart codes',     price: '6.00 USDC',  reviews: '312 reviews', rating: 4.66, reviewsBottom: '403 reviews' },
-  agent_lang_translation: { name: 'Language Translation',desc: 'Speak and translate',     price: '2.00 USDC',  reviews: '189 reviews', rating: 4.7,  reviewsBottom: '159 reviews' },
-  agent_image_gen:        { name: 'Image Generation',    desc: 'Provide content',         price: '5.00 USDC',  reviews: '199 reviews', rating: 4.9,  reviewsBottom: '256 reviews' },
-  agent_ai_moderation:    { name: 'AI Moderation',       desc: 'Monitor breaches',        price: '2.50 USDC',  reviews: '330 reviews', rating: 4.53, reviewsBottom: '330 reviews' },
+  agent_smc_alpha_executor: {
+    name: 'SMC Alpha Executor',
+    desc: 'Autonomous BTC & token-pair trading agent using Smart Money Concepts analysis. Executes BTC/USDC/EURC swaps on Arc via Circle App Kit Swap - no human confirmation required per trade.',
+    price: '15.00 USDC',
+    reviews: '412 reviews',
+    rating: 4.8,
+    reviewsBottom: '412 reviews',
+  },
+  agent_risk_rebalancer: {
+    name: 'Risk-Adjusted Rebalancer',
+    desc: 'Continuously monitors portfolio allocation and autonomously rebalances toward target weights using real-time risk signals. Executes rebalancing trades via Arc StableFX within user-defined spend limits.',
+    price: '12.00 USDC',
+    reviews: '380 reviews',
+    rating: 4.8,
+    reviewsBottom: '380 reviews',
+  },
+  agent_crossdex_arb: {
+    name: 'Cross-DEX Arbitrageur',
+    desc: 'Detects and executes swap-based arbitrage opportunities across Arc-native liquidity pools. Operates fully autonomously within user-configured risk envelopes - no flash loans, pure spot arbitrage.',
+    price: '18.00 USDC',
+    reviews: '295 reviews',
+    rating: 4.8,
+    reviewsBottom: '295 reviews',
+  },
+  agent_data_analysis: { name: 'Data Analysis', desc: 'Monitor data', price: '3.000 USDC', reviews: '253 reviews', rating: 4.7, reviewsBottom: '276 reviews' },
+  agent_content_writing: { name: 'Content Writing', desc: 'Analyze script writing', price: '4.50 USDC', reviews: '492 reviews', rating: 4.7, reviewsBottom: '492 reviews' },
+  agent_python_coding: { name: 'Python Coding', desc: 'Analyze smart codes', price: '6.00 USDC', reviews: '312 reviews', rating: 4.66, reviewsBottom: '403 reviews' },
+  agent_lang_translation: { name: 'Language Translation', desc: 'Speak and translate', price: '2.00 USDC', reviews: '189 reviews', rating: 4.7, reviewsBottom: '159 reviews' },
+  agent_image_gen: { name: 'Image Generation', desc: 'Provide content', price: '5.00 USDC', reviews: '199 reviews', rating: 4.9, reviewsBottom: '256 reviews' },
+  agent_ai_moderation: { name: 'AI Moderation', desc: 'Monitor breaches', price: '2.50 USDC', reviews: '330 reviews', rating: 4.53, reviewsBottom: '330 reviews' },
 };
 
-const d = (id: string, fallback: Agent) => DISPLAY_MAP[id] ?? {
-  name: fallback.name, desc: fallback.description,
-  price: `${fallback.usdc_price.toFixed(2)} USDC`,
-  reviews: `${fallback.review_count} reviews`, rating: fallback.rating,
-  reviewsBottom: `${fallback.review_count} reviews`,
+const d = (id: string, fallback: Agent) => {
+  const mapped = DISPLAY_MAP[id];
+  if (mapped) return mapped;
+
+  // Fallback sanitizer — if name/desc starts with ipfs:// or raw URI, format cleanly
+  let cleanName = fallback.name;
+  if (!cleanName || cleanName.startsWith('ipfs://') || cleanName.startsWith('http')) {
+    cleanName = id.replace(/^agent_/, '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  let cleanDesc = fallback.description;
+  if (!cleanDesc || cleanDesc.startsWith('ipfs://')) {
+    cleanDesc = `Autonomous AI agent for ${cleanName}.`;
+  }
+
+  return {
+    name: cleanName,
+    desc: cleanDesc,
+    price: `${fallback.usdc_price.toFixed(2)} USDC`,
+    reviews: `${fallback.review_count} reviews`,
+    rating: fallback.rating,
+    reviewsBottom: `${fallback.review_count} reviews`,
+  };
 };
+
 
 // ─── USDC icon ─────────────────────────────────────────────────────────────────
 const USDCIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
@@ -146,54 +188,91 @@ const AgentCardSkeleton = () => (
 // ─── Main component ────────────────────────────────────────────────────────────
 export default function Marketplace() {
   const {
-    agents, deployAgent, recordDeployment, setSelectedAgentForDeploy, setActiveTab,
-    usdcBalance, refreshBalance, isConnected, deployedAgentIds,
+    agents, agentsLoading, deployAgent, recordDeployment, setSelectedAgentForDeploy, setActiveTab,
+    usdcBalance, refreshBalance, isConnected, deployedAgentIds, startDaemonForAgent, refreshLicenses,
   } = useApp();
 
   const circle = useCircleWallet();
-  const { wallets: privyWallets } = useWallets();
-
-  // Active wallet routing
-  const activeMethod: 'circle' | 'privy' | null =
-    circle.authMethod === 'circle_google' ? 'circle'
-    : privyWallets.length > 0 ? 'privy'
-    : null;
-
-  const activeAddress: Address | null =
-    activeMethod === 'circle' ? (circle.walletAddress as Address | null)
-    : activeMethod === 'privy'  ? (privyWallets[0]?.address as Address | null)
-    : null;
+  const activeAddress: Address | null = circle.walletAddress as Address | null;
 
   // Per-card state
-  const [cardStates, setCardStates]   = useState<Record<string, CardState>>({});
+  const [cardStates, setCardStates] = useState<Record<string, CardState>>({});
+  const [mounted, setMounted] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const isLoadingAgents = agents.length === 0;
+  const isLoadingAgents = agentsLoading;
+
+  // Ratings state
+  const [ratingStats, setRatingStats] = useState<Record<string, { average: number; count: number; reviews?: any[] }>>({});
+  const [ratingModalAgent, setRatingModalAgent] = useState<Agent | null>(null);
+  const [selectedStars, setSelectedStars] = useState<number>(5);
+  const [commentText, setCommentText] = useState<string>('');
+  const [isSubmittingRating, setIsSubmittingRating] = useState(false);
+  const [ratingMsg, setRatingMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const fetchRatings = useCallback(async () => {
+    try {
+      const res = await fetch('/api/agents/rate');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.ratings) {
+        setRatingStats(data.ratings);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    setMounted(true);
+    void fetchRatings();
+  }, [fetchRatings]);
+
+  const handleRatingSubmit = async () => {
+    if (!ratingModalAgent || !circle.feeWalletAddress) {
+      setRatingMsg({ type: 'error', text: 'Fee Wallet address not active. Please connect wallet.' });
+      return;
+    }
+    setIsSubmittingRating(true);
+    setRatingMsg(null);
+
+    try {
+      const res = await fetch('/api/agents/rate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: ratingModalAgent.id,
+          userAddress: circle.feeWalletAddress,
+          rating: selectedStars,
+          comment: commentText,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to submit rating');
+      }
+
+      setRatingMsg({ type: 'success', text: 'Rating submitted successfully!' });
+      await fetchRatings();
+      setTimeout(() => {
+        setRatingModalAgent(null);
+        setRatingMsg(null);
+      }, 1500);
+    } catch (err: any) {
+      setRatingMsg({ type: 'error', text: err.message || 'Rating submission failed' });
+    } finally {
+      setIsSubmittingRating(false);
+    }
+  };
 
   const setCard = useCallback((id: string, state: CardState) =>
     setCardStates(prev => ({ ...prev, [id]: state })), []);
-
-  // ── Privy wallet client ─────────────────────────────────────────────────────
-  const getPrivyClient = useCallback(async () => {
-    const wallet = privyWallets[0];
-    if (!wallet) throw new Error('No Privy wallet connected');
-    const provider = await wallet.getEthereumProvider();
-    return createWalletClient({ account: wallet.address as Address, chain: arcTestnet, transport: custom(provider) });
-  }, [privyWallets]);
 
   // ── Core TX sender ──────────────────────────────────────────────────────────
   const sendTx = useCallback(async (data: `0x${string}`, to: Address): Promise<`0x${string}`> => {
     if (!activeAddress) throw new Error('No wallet connected');
 
-    if (activeMethod === 'privy') {
-      const wc = await getPrivyClient();
-      const hash = await wc.sendTransaction({ to, data, account: activeAddress, chain: arcTestnet });
-      await publicClient.waitForTransactionReceipt({ hash });
-      return hash;
-    }
-
     // Circle path
     const userToken = circle.loginResult?.userToken;
-    const walletId  = circle.circleWallets?.[0]?.id;
+    const walletId = circle.circleWallets?.[0]?.id;
     if (!userToken || !walletId) throw new Error('Circle credentials not found');
 
     // Fetch pre-existing transactions to correlate by difference
@@ -260,76 +339,82 @@ export default function Marketplace() {
     if (!hash) throw new Error('Timed out waiting for transaction hash.');
     await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}` });
     return hash as `0x${string}`;
-  }, [activeAddress, activeMethod, getPrivyClient, circle]);
+  }, [activeAddress, circle]);
 
-  // ── On-chain Deploy: Step 1 (approve) → Step 2 (purchaseAgent) ─────────────
+  // ── On-chain Deploy: calls ENGINE /agents/purchase (Fee Wallet, entity-secret signed) ──────
+  // No browser executeChallenge pop-up — USDC.approve + purchaseAgent are
+  // both executed server-side from the user's Developer-Controlled Fee Wallet.
   const handleDeploy = useCallback(async (agent: Agent) => {
     const phase = cardStates[agent.id]?.phase;
     if (phase === 'step1' || phase === 'step2' || phase === 'success') return;
 
-    // If no wallet, fall back to local state-only deploy (no real tx)
-    if (!activeAddress) {
-      setCard(agent.id, { phase: 'step1' });
-      setSelectedAgentForDeploy(agent);
-      const ok = await deployAgent(agent.id);
-      if (ok) {
-        setCard(agent.id, { phase: 'success' });
-        setTimeout(() => { setCard(agent.id, { phase: 'idle' }); setActiveTab('my-agents'); }, 1400);
-      } else {
-        setCard(agent.id, { phase: 'error', error: 'Insufficient balance.' });
-        setTimeout(() => setCard(agent.id, { phase: 'idle' }), 4000);
-      }
+    const userToken = circle.loginResult?.userToken;
+    if (!userToken) {
+      setCard(agent.id, { phase: 'error', error: 'Circle session not active. Please log in first.' });
+      setTimeout(() => setCard(agent.id, { phase: 'idle' }), 5000);
       return;
     }
 
     try {
-      // Step 1/2 — USDC approve
+      // Step 1/2 — ENGINE approve (shown to user as progress)
       setCard(agent.id, { phase: 'step1' });
-      const priceWei = parseUnits(agent.usdc_price.toFixed(6), 6);
 
-      // Check existing allowance first
-      const allowance = await publicClient.readContract({
-        address: USDC_ADDR, abi: ERC20_ABI, functionName: 'allowance',
-        args: [activeAddress, PROXY_ADDR],
-      }) as bigint;
+      const res = await fetch('/api/agents/purchase', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${userToken}`,
+        },
+        body: JSON.stringify({ agentId: agent.id }),
+      });
 
-      if (allowance < priceWei) {
-        const approveData = encodeFunctionData({ abi: ERC20_ABI, functionName: 'approve', args: [PROXY_ADDR, priceWei] });
-        await sendTx(approveData, USDC_ADDR);
+      // Step 2/2 label while we await the response (approve already done by ENGINE)
+      setCard(agent.id, { phase: 'step2' });
+
+      const data = await res.json();
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || `Purchase failed (HTTP ${res.status})`);
       }
 
-      // Step 2/2 — purchaseAgent
-      setCard(agent.id, { phase: 'step2' });
-      const purchaseData = encodeFunctionData({ abi: MARKETPLACE_ABI, functionName: 'purchaseAgent', args: [agent.id] });
-      const txHash = await sendTx(purchaseData, PROXY_ADDR);
+      const { txHash, alreadyOwned } = data as { txHash?: string; alreadyOwned?: boolean; feeWalletAddress?: string };
 
-      // Record in local app state — use recordDeployment (no balance check)
-      // because the on-chain tx receipt already proves payment.
+      // Record in local app state
       setSelectedAgentForDeploy(agent);
       recordDeployment(agent.id, txHash);
+
+      // Start the daemon loop on ENGINE (runs for both new purchases and already-owned agents)
+      const deployedOk = await startDaemonForAgent(agent.id);
+      if (!deployedOk) {
+        throw new Error('Daemon start was rejected by Engine.');
+      }
+
+      // Immediately re-run on-chain license check so deployedAgentIds
+      // reflects the new purchase without requiring a page refresh.
+      void refreshLicenses();
 
       setCard(agent.id, { phase: 'success' });
       setTimeout(() => { setCard(agent.id, { phase: 'idle' }); setActiveTab('my-agents'); }, 1600);
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : 'Unknown error';
-      const clean = raw.split('\n')[0].replace(/execution reverted:?\s*/i, '').slice(0, 90);
+      const clean = raw.split('\n')[0].replace(/execution reverted:?\s*/i, '').slice(0, 120);
       setCard(agent.id, { phase: 'error', error: `Deployment failed: ${clean || 'Transaction rejected.'}` });
       setTimeout(() => setCard(agent.id, { phase: 'idle' }), 5000);
     }
-  }, [cardStates, activeAddress, sendTx, deployAgent, recordDeployment, setSelectedAgentForDeploy, setActiveTab, setCard]);
+  }, [cardStates, circle, recordDeployment, refreshLicenses, setSelectedAgentForDeploy, setActiveTab, setCard, startDaemonForAgent]);
+
 
   // ── Render deploy button ─────────────────────────────────────────────────────
   const renderBtn = (agent: Agent) => {
-    // Already purchased — greyed out, non-interactive
+    // Already purchased — button allows switching to Agent Portal to operate/manage
     if (deployedAgentIds.includes(agent.id)) {
       return (
         <button
-          disabled
-          className="flex flex-col items-center justify-center border px-5 py-2 rounded-xl text-xs font-semibold cursor-not-allowed opacity-40 min-w-[110px] bg-[#2A2F35]/30 border-[#2A2F35] text-[#8a8f98]"
+          onClick={() => setActiveTab('my-agents')}
+          className="flex flex-col items-center justify-center border border-[#4E8981]/40 px-5 py-2 rounded-xl text-xs font-semibold cursor-pointer text-[#4E8981] hover:bg-[#4E8981]/10 transition-colors min-w-[110px]"
         >
           <div className="flex items-center gap-1.5">
             <CheckCircle size={13} weight="fill" />
-            <span>Already Bought</span>
+            <span>Agent Portal</span>
           </div>
         </button>
       );
@@ -388,6 +473,8 @@ export default function Marketplace() {
             <span className="text-[9px] opacity-70 font-normal mt-0.5 tracking-wide">{cfg.sub}</span>
           )}
         </button>
+
+        {/* Generic error text */}
         {state.phase === 'error' && state.error && (
           <p className="text-[10px] text-rose-400 leading-snug text-right max-w-[180px] animate-fadeIn">
             {state.error}
@@ -459,60 +546,159 @@ export default function Marketplace() {
         {isLoadingAgents
           ? [...Array(6)].map((_, i) => <AgentCardSkeleton key={i} />)
           : agents.map(agent => {
-              const info = d(agent.id, agent);
-              return (
-                <div
-                  key={agent.id}
-                  className="bg-[#1A1D20] border border-[#2A2F35] rounded-[16px] p-6 flex flex-col justify-between min-h-[220px] shadow-xl hover:border-[#4E8981]/50 hover:shadow-[0_0_20px_rgba(78,137,129,0.05)] transition-all duration-300"
-                >
-                  <div>
-                    {/* Card header */}
-                    <div className="flex items-start gap-4 mb-4">
-                      <div className="w-12 h-12 rounded-xl bg-[#4E8981]/10 border border-[#4E8981]/20 flex items-center justify-center flex-shrink-0">
-                        {getAgentIcon(agent.id, agent.tags[0])}
-                      </div>
-                      <div>
-                        <h3 className="text-base font-bold text-white leading-tight">{info.name}</h3>
-                        <p className="text-xs text-[#8a8f98] mt-1">{info.desc}</p>
-                      </div>
+            const info = d(agent.id, agent);
+            const rStat = ratingStats[agent.id];
+            const hasRatings = rStat && rStat.count > 0;
+            const avgRating = hasRatings ? rStat.average : 0;
+            const countRating = hasRatings ? rStat.count : 0;
+            const isLicensed = deployedAgentIds.includes(agent.id);
+
+            return (
+              <div
+                key={agent.id}
+                className="bg-[#1A1D20] border border-[#2A2F35] rounded-[16px] p-6 flex flex-col justify-between min-h-[240px] shadow-xl hover:border-[#4E8981]/50 hover:shadow-[0_0_20px_rgba(78,137,129,0.05)] transition-all duration-300 relative"
+              >
+                <div>
+                  {/* Card header */}
+                  <div className="flex items-start gap-4 mb-4">
+                    <div className="w-12 h-12 rounded-xl bg-[#4E8981]/10 border border-[#4E8981]/20 flex items-center justify-center flex-shrink-0">
+                      {getAgentIcon(agent.id, agent.tags[0])}
                     </div>
-
-                    {/* Price & reviews */}
-                    <div className="flex justify-between items-baseline mb-3">
-                      <span className="text-sm font-bold text-[#4E8981]">{info.price}</span>
-                      {/* <span className="text-xs text-[#8a8f98]">{info.reviews}</span> */}
+                    <div>
+                      <h3 className="text-base font-bold text-white leading-tight">{info.name}</h3>
+                      <p className="text-xs text-[#8a8f98] mt-1">{info.desc}</p>
                     </div>
+                  </div>
 
-                    <hr className="border-[#2A2F35] mb-3" />
+                  {/* Price & license badge */}
+                  <div className="flex justify-between items-baseline mb-3">
+                    <span className="text-sm font-bold text-[#4E8981]">{info.price}</span>
+                    {isLicensed && (
+                      <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded-full">
+                        Licensed
+                      </span>
+                    )}
+                  </div>
 
-                    {/* Stars */}
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-1">
+                  <hr className="border-[#2A2F35] mb-3" />
+
+                  {/* Real Rating Display */}
+                  <div className="flex items-center justify-between mb-4">
+                    {hasRatings ? (
+                      <div className="flex items-center gap-1.5">
                         <div className="flex gap-0.5">
                           {[...Array(5)].map((_, i) => (
                             <Star key={i} size={14} weight="fill"
-                              className={i < Math.floor(info.rating) ? 'text-[#facc15]' : 'text-[#2A2F35]'} />
+                              className={i < Math.floor(avgRating) ? 'text-[#facc15]' : 'text-[#2A2F35]'} />
                           ))}
                         </div>
-                        <span className="text-xs font-bold text-white ml-1">
-                          {info.rating.toString().replace('.', ',')}
+                        <span className="text-xs font-bold text-white">
+                          {avgRating.toFixed(1)}
+                        </span>
+                        <span className="text-[10px] text-[#8a8f98]">
+                          ({countRating} {countRating === 1 ? 'rating' : 'ratings'})
                         </span>
                       </div>
-                      {/* <span className="text-xs text-[#8a8f98]">{info.reviewsBottom}</span> */}
-                    </div>
-                  </div>
+                    ) : (
+                      <span className="text-xs text-[#8a8f98] italic bg-[#0B0B0C] px-2.5 py-1 rounded-md border border-[#2A2F35]">
+                        No ratings yet
+                      </span>
+                    )}
 
-                  {/* Deploy button — live on-chain flow */}
-                  <div className="flex justify-end">
-                    {renderBtn(agent)}
+                    {isLicensed && (
+                      <button
+                        onClick={() => {
+                          setRatingModalAgent(agent);
+                          setRatingMsg(null);
+                          const userAddrStr = (circle.feeWalletAddress || activeAddress || '').toLowerCase();
+                          const existingReview = (rStat?.reviews ?? []).find(
+                            (r: any) => r.userAddress.toLowerCase() === userAddrStr
+                          );
+                          if (existingReview) {
+                            setSelectedStars(existingReview.rating);
+                            setCommentText(existingReview.comment || '');
+                          } else {
+                            setSelectedStars(5);
+                            setCommentText('');
+                          }
+                        }}
+                        className="text-[10px] font-semibold text-[#4E8981] hover:underline cursor-pointer"
+                      >
+                        {(() => {
+                          const userAddrStr = (circle.feeWalletAddress || activeAddress || '').toLowerCase();
+                          const existing = (rStat?.reviews ?? []).find(
+                            (r: any) => r.userAddress.toLowerCase() === userAddrStr
+                          );
+                          return existing ? `Edit Review (★ ${existing.rating})` : 'Rate Agent';
+                        })()}
+                      </button>
+                    )}
                   </div>
                 </div>
-              );
-            })}
+
+                {/* Deploy button — live on-chain flow */}
+                <div className="flex justify-end">
+                  {renderBtn(agent)}
+                </div>
+              </div>
+            );
+          })}
       </div>
 
+      {/* Interactive Rating Modal for Licensed Users */}
+      {ratingModalAgent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-[#131619] border border-[#23272C] rounded-2xl p-6 shadow-2xl w-full max-w-sm flex flex-col gap-4 relative">
+            <div className="flex justify-between items-center border-b border-[#23272C] pb-3">
+              <h3 className="font-semibold text-sm text-white tracking-wide">Rate {ratingModalAgent.name}</h3>
+              <button onClick={() => setRatingModalAgent(null)} className="text-[#8a8f98] hover:text-white">✕</button>
+            </div>
+            <p className="text-xs text-[#8a8f98]">
+              Select your rating for this agent (1 to 5 stars):
+            </p>
+            <div className="flex items-center justify-center gap-2 py-2">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  onClick={() => setSelectedStars(star)}
+                  className="p-1 cursor-pointer transition-transform hover:scale-110"
+                >
+                  <Star size={28} weight="fill" className={star <= selectedStars ? 'text-[#facc15]' : 'text-[#2A2F35]'} />
+                </button>
+              ))}
+            </div>
+            <textarea
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+              placeholder="Optional short review or comment..."
+              className="w-full bg-[#0B0B0C] border border-[#2A2F35] rounded-xl p-3 text-xs text-white outline-none focus:border-[#4E8981] resize-none h-20"
+            />
+            {ratingMsg && (
+              <p className={`text-xs p-2 rounded-lg ${ratingMsg.type === 'success' ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-800/40' : 'bg-rose-950/40 text-rose-400 border border-rose-800/40'}`}>
+                {ratingMsg.text}
+              </p>
+            )}
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setRatingModalAgent(null)}
+                className="flex-1 py-2 border border-[#2A2F35] text-[#8a8f98] rounded-xl text-xs font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRatingSubmit}
+                disabled={isSubmittingRating}
+                className="flex-1 py-2 border border-[#4E8981] bg-[#4E8981]/20 text-[#4E8981] hover:text-white rounded-xl text-xs font-semibold"
+              >
+                {isSubmittingRating ? 'Submitting...' : 'Submit Rating'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* No-wallet hint */}
-      {!isConnected && !isLoadingAgents && (
+      {mounted && !isConnected && !isLoadingAgents && (
         <p className="text-center text-xs text-[#8a8f98] pt-2">
           Connect a wallet (Google or External) to execute on-chain deployments.
         </p>

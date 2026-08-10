@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useApp } from './context';
-import { useCircleWallet } from './components/providers/CircleWalletProvider';
-import { useWallets } from '@privy-io/react-auth';
-import { Cpu, ShieldCheck, Gear, TerminalWindow, ArrowRight, X, PaperPlaneRight, CaretDown, TrendUp, ChartLine, FileText, Code, Translate, Image as ImageIcon } from '@phosphor-icons/react';
-import { Agent } from '../types';
+import {
+  Cpu, ShieldCheck, TrendUp, ChartLine, FileText, Code, Translate, Image as ImageIcon,
+  ArrowRight, Gear, Play, Stop, Spinner, Robot, Clock, ArrowClockwise, Copy, CheckSquare,
+} from '@phosphor-icons/react';
 
 // Matches the sidebar My Agents double-gear icon (without checkmark badge)
 const AgentSettingsIcon = () => (
@@ -42,151 +42,6 @@ const getAgentIcon = (id: string, iconName?: string) => {
   }
 };
 
-// ─── Console Log Line ──────────────────────────────────────────────────────────
-interface ConsoleLine {
-  id: string;
-  type: 'system' | 'user' | 'ack';
-  text: string;
-  ts: string;
-}
-
-function nowTs() {
-  return new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-// ─── Agent Console Panel ───────────────────────────────────────────────────────
-function AgentConsole({ agent, onClose }: { agent: Agent; onClose: () => void }) {
-  // ── Wallet resolution (hooks must be at component top-level) ─────────────────
-  const circle = useCircleWallet();
-  const { wallets: privyWallets } = useWallets();
-  const userAddress: string | null = circle.walletAddress ?? privyWallets[0]?.address ?? null;
-
-  const [input, setInput] = useState('');
-  const [lines, setLines] = useState<ConsoleLine[]>([
-    { id: 'boot-1', type: 'system', text: `Node "${agent.name}" — session initialised.`, ts: nowTs() },
-    { id: 'boot-2', type: 'system', text: 'Awaiting operational directive…', ts: nowTs() },
-  ]);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // Auto-scroll to bottom on new lines
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [lines]);
-
-  // Focus the input on mount
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  const addLine = (line: Omit<ConsoleLine, 'id'>) =>
-    setLines(prev => [...prev, { id: `line-${Date.now()}-${Math.random()}`, ...line }]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const directive = input.trim();
-    if (!directive) return;
-
-    // Echo user input immediately
-    addLine({ type: 'user', text: `> ${directive}`, ts: nowTs() });
-    setInput('');
-
-    // Pending ack while we verify the license
-    addLine({ type: 'ack', text: '⟳ Verifying license and queuing directive…', ts: nowTs() });
-
-    try {
-      const res = await fetch('/api/endpoints', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'executeDirective',
-          userAddress: userAddress ?? '',
-          agentId: agent.id,
-          directive,
-        }),
-      });
-      const json = await res.json();
-
-      addLine({
-        type: res.ok ? 'ack' : 'system',
-        text: res.ok
-          ? `✓ ${json.message ?? 'Directive accepted.'}`
-          : `✗ ${json.error ?? 'Execution blocked.'}`,
-        ts: nowTs(),
-      });
-    } catch {
-      addLine({
-        type: 'system',
-        text: '✗ Network error — could not reach execution proxy.',
-        ts: nowTs(),
-      });
-    }
-  };
-
-  return (
-    <div className="mt-4 rounded-xl border border-[#2A2F35] bg-[#0B0B0C] overflow-hidden animate-fadeIn">
-      {/* Console top bar */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-[#2A2F35] bg-[#0f1214]">
-        <div className="flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-[10px] font-bold text-[#4E8981] tracking-widest uppercase font-mono">
-            {agent.id} — Live Console
-          </span>
-        </div>
-        <button
-          onClick={onClose}
-          className="text-[#8a8f98] hover:text-white transition-colors p-1 rounded cursor-pointer"
-        >
-          <X size={14} />
-        </button>
-      </div>
-
-      {/* Log output */}
-      <div className="h-36 overflow-y-auto px-4 py-3 space-y-1.5 font-mono text-[11px] scrollbar-none">
-        {lines.map(line => (
-          <div key={line.id} className="flex gap-2">
-            <span className="text-[#2A2F35] flex-shrink-0">[{line.ts}]</span>
-            <span
-              className={
-                line.type === 'user'
-                  ? 'text-[#4E8981]'
-                  : line.type === 'ack'
-                  ? 'text-amber-400/80'
-                  : 'text-[#8a8f98]'
-              }
-            >
-              {line.text}
-            </span>
-          </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
-
-      {/* Input row */}
-      <form
-        onSubmit={handleSubmit}
-        className="flex items-center gap-2 px-4 py-2 border-t border-[#2A2F35] bg-[#0f1214]"
-      >
-        <span className="text-[#4E8981] font-mono text-xs flex-shrink-0">$</span>
-        <input
-          ref={inputRef}
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          placeholder="Assign Operational Directive…"
-          className="flex-1 bg-transparent text-white text-xs font-mono outline-none placeholder-[#3a4048]"
-        />
-        <button
-          type="submit"
-          disabled={!input.trim()}
-          className="text-[#4E8981] hover:text-white disabled:text-[#2A2F35] transition-colors cursor-pointer"
-        >
-          <PaperPlaneRight size={16} weight="fill" />
-        </button>
-      </form>
-    </div>
-  );
-}
-
 // ─── Glassmorphic Empty State ──────────────────────────────────────────────────
 function EmptyDeployments({ onBrowse }: { onBrowse: () => void }) {
   return (
@@ -204,7 +59,7 @@ function EmptyDeployments({ onBrowse }: { onBrowse: () => void }) {
         <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#4E8981]/4 rounded-full blur-2xl pointer-events-none" />
 
         {/* Icon */}
-        <div className="relative w-16 h-16 mx-auto mb-6 rounded-2xl border border-[#4E8981]/20 bg-[#4E8981]/5 flex items-center justify-center">
+        <div className="relative w-16 h-16 mx-auto mb-6 rounded-2xl border border-[#4E8981]/20 bg-[#4E8981]/5 flex items-center justify-center text-[#4E8981]">
           <AgentSettingsIcon />
           <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-[#2A2F35] border border-[#0B0B0C] flex items-center justify-center">
             <span className="w-1.5 h-1.5 rounded-full bg-[#8a8f98]" />
@@ -248,99 +103,253 @@ function EmptyDeployments({ onBrowse }: { onBrowse: () => void }) {
 
 // ─── Main Component ────────────────────────────────────────────────────────────
 export default function MyAgents() {
-  const { agents, deployedAgentIds, setActiveTab, setSelectedAgentForDeploy } = useApp();
+  const {
+    agents, deployedAgentIds, daemonStatus, isDeployingDaemon,
+    startDaemonForAgent, stopDaemonForAgent, refreshDaemonStatus,
+    setActiveTab, setSelectedAgentForDeploy,
+  } = useApp();
 
-  // Only show deployed agents (those whose ID appears in deployedAgentIds)
-  const deployedAgents = agents.filter(a => deployedAgentIds.includes(a.id));
+  const [isActionLoading, setIsActionLoading] = useState<string | null>(null);
 
-  // Which agent's console is currently open (null = none)
-  const [openConsoleId, setOpenConsoleId] = useState<string | null>(null);
-
-  const handleLaunch = (agent: Agent) => {
-    setOpenConsoleId(prev => (prev === agent.id ? null : agent.id));
-  };
+  // Deployed or running agents
+  const visibleAgents = agents.filter(a =>
+    deployedAgentIds.includes(a.id) ||
+    Boolean(daemonStatus?.running && (daemonStatus?.agentId === a.id || (!daemonStatus?.agentId && a.id === 'agent_smc_alpha_executor')))
+  );
 
   const handleBrowseMarketplace = () => {
     setActiveTab('marketplace');
   };
 
+  const handleToggleDaemon = async (agentId: string, isRunning: boolean) => {
+    setIsActionLoading(agentId);
+    try {
+      if (isRunning) {
+        await stopDaemonForAgent();
+      } else {
+        await startDaemonForAgent(agentId);
+      }
+    } finally {
+      setIsActionLoading(null);
+    }
+  };
+
+  const formatUptime = (seconds?: number) => {
+    if (!seconds || seconds <= 0) return '0s';
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (m === 0) return `${s}s`;
+    const h = Math.floor(m / 60);
+    const remM = m % 60;
+    if (h === 0) return `${m}m ${s}s`;
+    return `${h}h ${remM}m`;
+  };
+
+  const formatLastCycle = (lastCycleAt?: number | null) => {
+    if (!lastCycleAt) return 'Cycle in progress...';
+    const diffSec = Math.max(0, Math.floor((Date.now() - lastCycleAt) / 1000));
+    if (diffSec < 5) return 'Just now';
+    if (diffSec < 60) return `${diffSec}s ago`;
+    return `${Math.floor(diffSec / 60)}m ago`;
+  };
+
   return (
     <div className="space-y-10">
-      <div>
-        <h1 className="text-3xl font-bold font-sans text-[#e5e2e1] mb-2 tracking-tight">
-          Active Deployments
-        </h1>
-        <p className="text-[#c1c6d5] text-sm">
-          Select a deployed computational unit to assign tasks or configure execution hooks.
-        </p>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold font-sans text-[#e5e2e1] mb-2 tracking-tight">
+            Agent Portal &amp; Deployments
+          </h1>
+          <p className="text-[#c1c6d5] text-sm">
+            Monitor live execution loops, manage autonomous daemons, and configure operational directives.
+          </p>
+        </div>
+        <button
+          onClick={() => void refreshDaemonStatus()}
+          className="flex items-center gap-2 px-3.5 py-2 bg-[#1A1D20] border border-[#2A2F35] hover:border-[#4E8981]/50 text-[#8a8f98] hover:text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+        >
+          <ArrowClockwise size={14} />
+          <span>Refresh Status</span>
+        </button>
       </div>
 
       {/* Empty state */}
-      {deployedAgents.length === 0 && (
+      {visibleAgents.length === 0 && (
         <EmptyDeployments onBrowse={handleBrowseMarketplace} />
       )}
 
       {/* Agent cards grid */}
-      {deployedAgents.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {deployedAgents.map((agent) => {
-            const isOpen = openConsoleId === agent.id;
+      {visibleAgents.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {visibleAgents.map((agent) => {
+            const isTradingAgent = ['agent_smc_alpha_executor', 'agent_crossdex_arb', 'agent_risk_rebalancer'].includes(agent.id) ||
+                                   (agent.category?.toLowerCase() || '').includes('trading') ||
+                                   (agent.category?.toLowerCase() || '').includes('defi');
+
+            const isDaemonRunning = Boolean(
+              daemonStatus?.running && daemonStatus?.agentId === agent.id
+            );
+            const isLoading = isActionLoading === agent.id || (isDaemonRunning ? false : isDeployingDaemon);
+
             return (
               <div
                 key={agent.id}
-                className="bg-[#1A1D20] border border-[#2A2F35] rounded-xl p-6 hover:border-[#4E8981]/50 transition-all"
+                className={`bg-[#1A1D20] border rounded-2xl p-6 transition-all shadow-xl flex flex-col justify-between ${
+                  isDaemonRunning ? 'border-[#4E8981]/60 bg-[#1A1D20]' : 'border-[#2A2F35]'
+                }`}
               >
                 <div>
-                  <div className="flex justify-between items-start mb-4">
+                  {/* Top Bar: Icon, Name & Status Pill */}
+                  <div className="flex justify-between items-start mb-6">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-[#4E8981]/10 border border-[#4E8981]/20 flex items-center justify-center text-[#4E8981]">
+                      <div className="w-12 h-12 rounded-xl bg-[#4E8981]/10 border border-[#4E8981]/30 flex items-center justify-center text-[#4E8981] flex-shrink-0">
                         {getAgentIcon(agent.id, agent.icon)}
                       </div>
                       <div>
-                        <h3 className="text-base font-bold text-white tracking-tight">{agent.name}</h3>
-                        <p className="text-[10px] text-[#4E8981] font-bold tracking-widest uppercase">Node: ACTIVE</p>
+                        <h3 className="text-lg font-bold text-white tracking-tight">{agent.name}</h3>
+                        <p className="text-[11px] text-[#8a8f98] font-mono">{agent.id}</p>
                       </div>
                     </div>
-                    <span className="flex items-center gap-1 text-[10px] bg-[#4E8981]/10 border border-[#4E8981]/20 text-[#4E8981] px-2 py-0.5 rounded-md font-semibold">
-                      <ShieldCheck size={12} weight="fill" />
-                      SECURED
-                    </span>
+
+                    {isTradingAgent ? (
+                      isDaemonRunning ? (
+                        <div className="flex items-center gap-2 px-3 py-1 bg-[#4E8981]/15 text-[#4E8981] rounded-full border border-[#4E8981]/40 animate-pulse">
+                          <span className="w-2 h-2 rounded-full bg-[#4E8981]" />
+                          <span className="text-[10px] font-bold uppercase tracking-wider">DAEMON RUNNING</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 px-3 py-1 bg-amber-500/10 text-amber-400 rounded-full border border-amber-500/30">
+                          <span className="w-2 h-2 rounded-full bg-amber-400" />
+                          <span className="text-[10px] font-bold uppercase tracking-wider">DAEMON PAUSED</span>
+                        </div>
+                      )
+                    ) : (
+                      <div className="flex items-center gap-2 px-3 py-1 bg-[#4E8981]/15 text-[#4E8981] rounded-full border border-[#4E8981]/30">
+                        <ShieldCheck size={12} weight="fill" />
+                        <span className="text-[10px] font-bold uppercase tracking-wider">SECURED &amp; READY</span>
+                      </div>
+                    )}
                   </div>
+
                   <p className="text-xs text-[#8a8f98] leading-relaxed mb-6">
                     {agent.description}
                   </p>
+
+                  {/* Telemetry / Status Panel */}
+                  {isTradingAgent && isDaemonRunning ? (
+                    <div className="bg-[#0B0B0C] border border-[#4E8981]/25 rounded-xl p-4 mb-6 space-y-3">
+                      <div className="flex items-center justify-between text-xs pb-2 border-b border-[#2A2F35]">
+                        <span className="text-[#8a8f98] flex items-center gap-1.5">
+                          <Robot size={14} className="text-[#4E8981]" /> Execution Daemon
+                        </span>
+                        <span className="text-[#4E8981] font-mono font-bold">Active ({daemonStatus?.intervalSeconds ?? 60}s Loop)</span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 py-1">
+                        <div className="bg-[#1A1D20] p-2.5 rounded-lg border border-[#2A2F35]">
+                          <span className="text-[9px] text-[#8a8f98] uppercase block font-bold">Completed Cycles</span>
+                          <span className="text-sm font-bold font-mono text-white mt-0.5 block">
+                            {daemonStatus?.cycleCount ?? 0}
+                          </span>
+                        </div>
+                        <div className="bg-[#1A1D20] p-2.5 rounded-lg border border-[#2A2F35]">
+                          <span className="text-[9px] text-[#8a8f98] uppercase block font-bold">Uptime</span>
+                          <span className="text-sm font-bold font-mono text-white mt-0.5 block">
+                            {formatUptime(daemonStatus?.uptimeSeconds)}
+                          </span>
+                        </div>
+                        <div className="bg-[#1A1D20] p-2.5 rounded-lg border border-[#2A2F35]">
+                          <span className="text-[9px] text-[#8a8f98] uppercase block font-bold">Last Cycle</span>
+                          <span className="text-xs font-bold font-mono text-[#4E8981] mt-1 block truncate">
+                            {formatLastCycle(daemonStatus?.lastCycleAt)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {daemonStatus?.tradingWalletAddress && (
+                        <div className="flex items-center justify-between pt-1 text-[11px]">
+                          <span className="text-[#8a8f98]">Trading Wallet:</span>
+                          <code className="text-[#60a5fa] font-mono bg-[#1A1D20] px-2 py-0.5 rounded border border-[#3b82f6]/20">
+                            {`${daemonStatus.tradingWalletAddress.slice(0, 8)}...${daemonStatus.tradingWalletAddress.slice(-6)}`}
+                          </code>
+                        </div>
+                      )}
+                    </div>
+                  ) : isTradingAgent ? (
+                    <div className="bg-[#0B0B0C] border border-[#2A2F35] rounded-xl p-4 mb-6">
+                      <div className="flex items-start gap-3">
+                        <Gear size={20} className="text-amber-400/80 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-xs text-[#8a8f98] leading-relaxed">
+                            License verified on-chain. Launch the autonomous daemon to begin execution cycles.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-[#0B0B0C] border border-[#2A2F35] rounded-xl p-4 mb-6">
+                      <div className="flex items-start gap-3">
+                        <ShieldCheck size={20} className="text-[#4E8981] flex-shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-xs text-[#8a8f98] leading-relaxed">
+                            License verified on-chain. Ready for on-demand task execution and custom mission workflows.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                <div className="flex items-center justify-between pt-4 border-t border-[#2A2F35]">
-                  <div className="flex items-center gap-2">
-                    <button className="p-2 bg-[#4E8981]/10 border border-[#4E8981]/20 text-[#4E8981] hover:bg-[#4E8981]/20 rounded-lg transition-colors cursor-pointer">
-                      <Gear size={16} />
+                {/* Card Footer Controls */}
+                <div className="flex items-center gap-3 pt-4 border-t border-[#2A2F35]">
+                  {isTradingAgent ? (
+                    <>
+                      {isDaemonRunning ? (
+                        <button
+                          id={`stop-daemon-${agent.id}`}
+                          disabled={isLoading}
+                          onClick={() => void handleToggleDaemon(agent.id, true)}
+                          className="flex-1 py-2.5 bg-rose-950/20 border border-rose-900/40 hover:border-rose-600 text-rose-400 hover:text-rose-300 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                        >
+                          {isLoading ? <Spinner size={14} className="animate-spin" /> : <Stop size={14} weight="fill" />}
+                          <span>Stop Daemon</span>
+                        </button>
+                      ) : (
+                        <button
+                          id={`start-daemon-${agent.id}`}
+                          disabled={isLoading}
+                          onClick={() => void handleToggleDaemon(agent.id, false)}
+                          className="flex-1 py-2.5 bg-[#4E8981] hover:bg-[#4E8981]/90 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-lg active:scale-95 disabled:opacity-50"
+                        >
+                          {isLoading ? <Spinner size={14} className="animate-spin" /> : <Play size={14} weight="fill" />}
+                          <span>Start Daemon</span>
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => {
+                          setSelectedAgentForDeploy(agent);
+                          setActiveTab('workflows');
+                        }}
+                        className="flex-1 py-2.5 bg-transparent border border-[#2A2F35] hover:border-[#4E8981]/50 text-[#8a8f98] hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        <span>Execute Mission</span>
+                        <ArrowRight size={12} weight="bold" />
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setSelectedAgentForDeploy(agent);
+                        setActiveTab('workflows');
+                      }}
+                      className="w-full py-3 bg-[#4E8981] hover:bg-[#4E8981]/90 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg active:scale-95"
+                    >
+                      <span>Execute Mission</span>
+                      <ArrowRight size={14} weight="bold" />
                     </button>
-                  </div>
-                  <button
-                    onClick={() => handleLaunch(agent)}
-                    className={`flex items-center gap-1.5 border px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer active:scale-95 transition-all ${
-                      isOpen
-                        ? 'bg-[#4E8981]/20 border-[#4E8981]/60 text-[#4E8981]'
-                        : 'bg-[#4E8981]/10 border-[#4E8981]/40 hover:bg-[#4E8981]/20 text-[#4E8981]'
-                    }`}
-                  >
-                    <TerminalWindow size={16} />
-                    {isOpen ? 'Close Console' : 'Launch Console'}
-                    <CaretDown
-                      size={12}
-                      className={`transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
-                    />
-                  </button>
+                  )}
                 </div>
-
-                {/* Agent Console overlay */}
-                {isOpen && (
-                  <AgentConsole
-                    agent={agent}
-                    onClose={() => setOpenConsoleId(null)}
-                  />
-                )}
               </div>
             );
           })}

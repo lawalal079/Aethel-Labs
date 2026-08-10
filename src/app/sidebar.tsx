@@ -92,9 +92,9 @@ export default function Sidebar() {
     },
     {
       id: 'workflows' as const,
-      label: 'Coming Soon',
+      label: 'Agent Portal',
       icon: WorkflowsIcon,
-      disabled: true,
+      disabled: false,
     },
     {
       id: 'billing' as const,

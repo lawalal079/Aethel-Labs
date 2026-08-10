@@ -1,0 +1,32 @@
+{
+  "name": "aethel-engine",
+  "version": "1.0.0",
+  "description": "Æthel Labs backend engine service — payment verification & agent dispatch",
+  "private": true,
+  "main": "src/api/dispatcher.ts",
+  "scripts": {
+    "start": "ts-node --transpile-only src/api/dispatcher.ts",
+    "start:prod": "node dist/api/dispatcher.js",
+    "dev": "nodemon --ext ts --exec ts-node --transpile-only src/api/dispatcher.ts",
+    "listener": "ts-node --transpile-only src/api/listener.ts",
+    "build": "tsc",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@circle-fin/adapter-circle-wallets": "^1.2.8",
+    "@circle-fin/app-kit": "^1.4.2",
+    "@circle-fin/developer-controlled-wallets": "^10.3.1",
+    "@circle-fin/x402-batching": "^3.2.0",
+    "@x402/core": "^2.16.0",
+    "@x402/evm": "^2.16.0",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.17.0",
+    "viem": "^2.53.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "nodemon": "^3.1.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}

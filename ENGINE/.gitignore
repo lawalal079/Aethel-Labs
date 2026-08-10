@@ -1,0 +1,19 @@
+# Environment variables (STRICTLY IGNORED)
+.env
+.env*.local
+!.env.example
+
+# Build & Dependencies
+node_modules/
+dist/
+logs/
+*.log
+
+# Local Runtime Data & Sessions
+data/sessions/
+data/*.json
+!data/.gitkeep
+
+# Sensitive Recovery Files & One-off Setup Folders
+trading-wallet/
+*.dat

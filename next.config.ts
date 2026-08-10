@@ -7,7 +7,16 @@ const nextConfig: NextConfig = {
   },
   serverExternalPackages: [
     "@circle-fin/w3s-pw-web-sdk",
+    "@circle-fin/developer-controlled-wallets",
+    "@circle-fin/x402-batching",
   ],
+  experimental: {
+    optimizePackageImports: [
+      "@phosphor-icons/react",
+      "viem",
+      "ethers",
+    ],
+  },
 };
 
 export default nextConfig;

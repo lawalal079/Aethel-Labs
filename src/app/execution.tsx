@@ -5,32 +5,40 @@ import { useApp } from './context';
 import { Play, Shield, Terminal, ArrowClockwise, Copy, Download, CheckCircle, Cpu, HardDrive } from '@phosphor-icons/react';
 
 export default function ExecutionPanel() {
-  const { selectedAgentForDeploy, runMission, agents } = useApp();
+  const {
+    selectedAgentForDeploy,
+    runMission,
+    agents,
+    executionLogs,
+    missionStatus,
+    missionLogs,
+    missionResult
+  } = useApp();
+
   const [missionText, setMissionText] = useState('');
   const [modelPreference, setModelPreference] = useState('Æthel Labs Core 4.0 (Recommended)');
   const [tokenBudget, setTokenBudget] = useState(1500);
   const [verificationLevel, setVerificationLevel] = useState(true);
   const [dataPersistence, setDataPersistence] = useState(false);
 
-  const [executing, setExecuting] = useState(false);
-  const [showResult, setShowResult] = useState(false);
-
   // Default to first agent if none is selected
   const activeAgent = selectedAgentForDeploy || agents[0];
+
+  const executing = missionStatus === 'Running';
 
   const handleExecute = async () => {
     if (executing) return;
 
-    setExecuting(true);
-    setShowResult(false);
+    // Find the deployment txHash for the active agent from execution logs
+    const deployLog = executionLogs.find(
+      (log) => log.agent_id === activeAgent.id && log.tx_type === 'Deployment'
+    );
+    const txHash = deployLog?.tx_hash || '0x' + '0'.repeat(40);
 
     try {
-      await runMission(activeAgent.id, missionText);
+      await runMission(missionText, activeAgent.id, txHash);
     } catch (err) {
       console.error(err);
-    } finally {
-      setExecuting(false);
-      setShowResult(true);
     }
   };
 
@@ -197,7 +205,7 @@ export default function ExecutionPanel() {
 
           <div className="flex-1 p-8 overflow-y-auto space-y-6">
             {/* Waiting Placeholder */}
-            {!executing && !showResult && (
+            {missionStatus === 'Idle' && (
               <div className="h-full flex flex-col items-center justify-center text-center space-y-3 opacity-40">
                 <div className="w-16 h-16 border-2 border-dashed border-[#8b919e] rounded-full flex items-center justify-center">
                   <Terminal size={32} />
@@ -206,59 +214,77 @@ export default function ExecutionPanel() {
               </div>
             )}
 
-            {/* Skeleton Loading State */}
-            {executing && (
-              <div className="space-y-6">
-                <div className="h-8 w-3/4 skeleton-pulse rounded"></div>
-                <div className="space-y-3">
-                  <div className="h-4 w-full skeleton-pulse rounded opacity-50"></div>
-                  <div className="h-4 w-5/6 skeleton-pulse rounded opacity-50"></div>
-                  <div className="h-4 w-4/6 skeleton-pulse rounded opacity-50"></div>
+            {/* Live Streaming Logs / Running State */}
+            {missionStatus === 'Running' && (
+              <div className="h-full flex flex-col space-y-4">
+                <div className="flex items-center gap-2 text-xs font-bold text-[#aac7ff] select-none">
+                  <span className="w-2 h-2 bg-amber-500 rounded-full animate-ping"></span>
+                  STREAMING TELEMETRY LOGS...
                 </div>
-                <div className="h-48 w-full border border-[#414753]/10 rounded-xl bg-[#201f1f]/30"></div>
-                <div className="h-4 w-2/3 skeleton-pulse rounded opacity-50"></div>
+                <div className="flex-1 min-h-[300px] border border-[#2A2F35]/50 bg-[#070708]/85 rounded-lg p-5 font-mono text-[11px] leading-relaxed text-[#aac7ff] overflow-y-auto space-y-2 scrollbar-none">
+                  {missionLogs.map((log, idx) => (
+                    <div key={idx} className="whitespace-pre-wrap animate-fadeIn select-text selection:bg-[#aac7ff]/20">
+                      <span className="text-[#8a8f98] mr-2">[{idx.toString().padStart(2, '0')}]</span> {log}
+                    </div>
+                  ))}
+                  <div className="animate-pulse text-amber-500">█</div>
+                </div>
               </div>
             )}
 
-            {/* Real Rendered Output Summary */}
-            {showResult && (
+            {/* Success Result View */}
+            {missionStatus === 'Success' && (
               <div className="space-y-6 animate-fadeIn">
-                <h1 className="text-2xl font-bold text-white tracking-tight">Market Analysis Summary</h1>
-                <p className="text-[#c1c6d5] leading-relaxed text-sm">
-                  Execution completed successfully. Æthel Labs coordinated operations over 4 secure compute nodes. Results detail optimal liquidity allocation.
-                </p>
+                <div className="flex items-center gap-2">
+                  <CheckCircle size={22} className="text-[#80ff9a]" weight="fill" />
+                  <h1 className="text-xl font-bold text-white tracking-tight">Execution Result</h1>
+                </div>
+                
+                <div className="p-5 border border-[#2A2F35]/50 bg-[#070708]/85 rounded-lg font-mono text-[11px] leading-relaxed text-[#80ff9a] whitespace-pre-wrap select-text">
+                  {missionResult}
+                </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="p-4 bg-[#1c1b1b] border border-[#414753]/10 rounded-lg">
-                    <span className="text-[#aac7ff] text-[10px] font-bold tracking-wider uppercase block mb-1">Volatility Index</span>
-                    <p className="text-white text-3xl font-bold tracking-tight">2.41%</p>
+                    <span className="text-[#aac7ff] text-[10px] font-bold tracking-wider uppercase block mb-1">Status</span>
+                    <p className="text-[#80ff9a] text-lg font-bold tracking-tight">SUCCESS</p>
                   </div>
                   <div className="p-4 bg-[#1c1b1b] border border-[#414753]/10 rounded-lg">
-                    <span className="text-[#aac7ff] text-[10px] font-bold tracking-wider uppercase block mb-1">Confidence Score</span>
-                    <p className="text-white text-3xl font-bold tracking-tight">98.2</p>
+                    <span className="text-[#aac7ff] text-[10px] font-bold tracking-wider uppercase block mb-1">Telemetry Sync</span>
+                    <p className="text-white text-lg font-bold tracking-tight">COMPLETED</p>
                   </div>
                 </div>
 
-                <div className="space-y-3 pt-4 border-t border-[#414753]/15">
-                  <h3 className="text-white font-bold text-sm">Strategic Recommendations</h3>
-                  <ul className="space-y-2 text-[#c1c6d5] text-sm">
-                    <li className="flex items-start gap-2.5">
-                      <CheckCircle size={18} className="text-[#0066cc] mt-0.5" weight="fill" />
-                      <span>Rebalance portfolio weighting towards USDC-backed assets to mitigate tail risk.</span>
-                    </li>
-                    <li className="flex items-start gap-2.5">
-                      <CheckCircle size={18} className="text-[#0066cc] mt-0.5" weight="fill" />
-                      <span>Initialize yield-farming sub-routines for the Layer 2 extension protocols.</span>
-                    </li>
-                  </ul>
+                <div className="p-5 border border-[#2A2F35]/50 bg-[#070708]/60 rounded-lg max-h-[180px] overflow-y-auto space-y-1.5 scrollbar-none select-text">
+                  <h3 className="text-xs font-bold text-neutral-400 uppercase tracking-widest mb-2">Final Execution Log</h3>
+                  {missionLogs.map((log, idx) => (
+                    <div key={idx} className="font-mono text-[10px] text-[#8a8f98] leading-tight">
+                      [{idx.toString().padStart(2, '0')}] {log}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Failed Result View */}
+            {missionStatus === 'Failed' && (
+              <div className="space-y-6 animate-fadeIn">
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 bg-[#ff8080] rounded-full animate-pulse"></div>
+                  <h1 className="text-xl font-bold text-[#ff8080] tracking-tight">Execution Aborted</h1>
                 </div>
 
-                <div className="mt-8 p-0.5 bg-gradient-to-r from-[#0066cc]/25 to-transparent rounded-lg">
-                  <div className="bg-[#0e0e0e] p-5 rounded-lg border border-[#414753]/10">
-                    <p className="text-[#c1c6d5] italic text-xs leading-relaxed">
-                      "This report was generated using the Æthel Labs Institutional Framework. All data points verified via on-chain oracle synchronization."
-                    </p>
-                  </div>
+                <div className="p-5 border border-[#ff8080]/20 bg-[#1a0e0e]/50 rounded-lg font-mono text-[11px] leading-relaxed text-[#ff8080] whitespace-pre-wrap select-text">
+                  {missionResult || 'Check transaction validation, escrow balance, or engine server status.'}
+                </div>
+
+                <div className="p-5 border border-[#2A2F35]/50 bg-[#070708]/60 rounded-lg max-h-[180px] overflow-y-auto space-y-1.5 scrollbar-none select-text">
+                  <h3 className="text-xs font-bold text-neutral-400 uppercase tracking-widest mb-2 font-mono">Trace Logs</h3>
+                  {missionLogs.map((log, idx) => (
+                    <div key={idx} className="font-mono text-[10px] text-[#8a8f98] leading-tight">
+                      [{idx.toString().padStart(2, '0')}] {log}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}

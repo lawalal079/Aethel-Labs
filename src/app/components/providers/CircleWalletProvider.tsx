@@ -1,8 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useCallback, useEffect, useRef, useState } from 'react';
-import { usePrivy, useWallets } from '@privy-io/react-auth';
-import { createPublicClient, formatUnits, http, parseAbi, type Address, type Chain } from 'viem';
+import { createPublicClient, formatUnits, getAddress, http, parseAbi, type Address, type Chain } from 'viem';
 import { setCookie, getCookie } from 'cookies-next';
 import { SocialLoginProvider } from '@circle-fin/w3s-pw-web-sdk/dist/src/types';
 import type { W3SSdk } from '@circle-fin/w3s-pw-web-sdk';
@@ -16,12 +15,16 @@ const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID as string;
 
 // ─── Viem & USDC config ───────────────────────────────────────────────────────
 
-// USDC contract address is configured per-chain via env — no hardcoded fallbacks.
 const USDC_ADDRESS = (process.env.NEXT_PUBLIC_USDC_ADDRESS ?? '') as Address;
+const GATEWAY_WALLET_ADDRESS = (process.env.NEXT_PUBLIC_GATEWAY_WALLET_ADDRESS ?? '0x0077777d7EBA4688BDeF3E311b846F25870A19B9') as Address;
 
 const ERC20_ABI = parseAbi([
   'function balanceOf(address owner) view returns (uint256)',
   'function decimals() view returns (uint8)',
+]);
+
+const GATEWAY_ABI = parseAbi([
+  'function availableBalance(address token, address user) view returns (uint256)',
 ]);
 
 const targetChain: Chain = {
@@ -34,17 +37,88 @@ const targetChain: Chain = {
   },
 };
 
-const publicClient = createPublicClient({ chain: targetChain, transport: http(RPC_URL) });
+const publicClient = createPublicClient({
+  chain: targetChain,
+  transport: http(RPC_URL, {
+    timeout: 8_000,
+    retryCount: 2,
+    retryDelay: 500,
+  }),
+});
 
+/** Retry helper — fast exponential backoff for RPC calls. */
+async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 2, baseDelayMs = 400): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts - 1) {
+        const delay = baseDelayMs * Math.pow(2, attempt) + Math.random() * 200;
+        await new Promise(res => setTimeout(res, delay));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+/** Wallet balance — Agent Wallet's own USDC via balanceOf() */
 async function fetchUsdcBalance(address: Address): Promise<string> {
   if (!USDC_ADDRESS) return '0.00';
   try {
-    const [raw, decimals] = await Promise.all([
-      publicClient.readContract({ address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'balanceOf', args: [address] }),
-      publicClient.readContract({ address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'decimals' }),
-    ]);
-    return parseFloat(formatUnits(raw as bigint, decimals as number)).toFixed(2);
-  } catch {
+    const checksummed = getAddress(address);
+    const raw = await withRetry(() =>
+      publicClient.readContract({ address: getAddress(USDC_ADDRESS), abi: ERC20_ABI, functionName: 'balanceOf', args: [checksummed] })
+    );
+    return parseFloat(formatUnits(raw as bigint, 6)).toFixed(2);
+  } catch (err) {
+    console.warn('[CircleWalletProvider] fetchUsdcBalance error (all retries exhausted):', err);
+    return '0.00';
+  }
+}
+
+/** Spending balance — Gateway's available balance via Circle /v1/balances API + contract fallback */
+async function fetchGatewayBalance(address: Address): Promise<string> {
+  if (!address) return '0.00';
+  try {
+    const checksummed = getAddress(address);
+    
+    // 1. Query Circle Gateway /v1/balances API endpoint (Arc Testnet domain 26)
+    // This is the EXACT withdrawable balance limit enforced by Circle Gateway API
+    try {
+      const circleRes = await fetch('https://gateway-api-testnet.circle.com/v1/balances', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: 'USDC',
+          sources: [{ depositor: checksummed, domain: 26 }],
+        }),
+      });
+      if (circleRes.ok) {
+        const circleData = await circleRes.json();
+        const found = circleData?.balances?.[0]?.balance;
+        if (found !== undefined && found !== null) {
+          return parseFloat(found).toFixed(6);
+        }
+      }
+    } catch (apiErr) {
+      console.warn('[CircleWalletProvider] Circle /v1/balances API error, using contract fallback:', apiErr);
+    }
+
+    // 2. Fallback to on-chain GatewayWallet.availableBalance if Circle API is unreachable
+    const raw = await withRetry(() =>
+      publicClient.readContract({
+        address: getAddress(GATEWAY_WALLET_ADDRESS),
+        abi: GATEWAY_ABI,
+        functionName: 'availableBalance',
+        args: [getAddress(USDC_ADDRESS), checksummed],
+      })
+    );
+    return parseFloat(formatUnits(raw as bigint, 6)).toFixed(6);
+
+  } catch (err) {
+    console.warn('[CircleWalletProvider] fetchGatewayBalance error:', err);
     return '0.00';
   }
 }
@@ -55,17 +129,28 @@ export interface CircleWalletContextValue {
   isConnected: boolean;
   isConnecting: boolean;
   walletAddress: string | null;
-  usdcBalance: string;
-  authMethod: 'privy' | 'circle_google' | null;
+  usdcBalance: string;        // Backward-compat alias for walletBalance
+  walletBalance: string;      // "Wallet balance" — Agent Wallet's own USDC via balanceOf()
+  spendingBalance: string;    // "Spending balance" — Gateway's available balance via availableBalance()
+  setSpendingBalance: React.Dispatch<React.SetStateAction<string>>;
+  tradingWalletAddress: string | null; // "Trading Wallet" — Developer-Controlled Wallet for automated swaps
+  tradingWalletBalance: string; // Trading Wallet USDC balance
+  tradingWalletHoldings: { symbol: string; name: string; balance: string; address: string }[];
+  isTradingWalletProvisioned: boolean;
+  feeWalletAddress: string | null; // "Fee Wallet" — Developer-Controlled Wallet for $0.0001 USDC task fee
+  feeWalletBalance: string; // Fee Wallet USDC balance
+  isFeeWalletProvisioned: boolean;
+  authMethod: 'circle_google' | null;
   authStatusMessage: string | null;
   loginWithGoogle: () => Promise<void>;
-  loginWithEOA: () => Promise<void>;
   logout: () => void;
   authError: string | null;
   refreshBalance: () => Promise<void>;
+  refreshTradingWallet: () => Promise<void>;
   loginResult?: LoginResult | null;
   circleWallets?: Wallet[];
   executeChallenge?: (challengeId: string) => Promise<unknown>;
+  signTypedData?: (domain: any, types: any, value: any) => Promise<string>;
 }
 
 const DEFAULT_VALUE: CircleWalletContextValue = {
@@ -73,13 +158,23 @@ const DEFAULT_VALUE: CircleWalletContextValue = {
   isConnecting: false,
   walletAddress: null,
   usdcBalance: '0.00',
+  walletBalance: '0.00',
+  spendingBalance: '0.00',
+  setSpendingBalance: () => {},
+  tradingWalletAddress: null,
+  tradingWalletBalance: '0.00',
+  tradingWalletHoldings: [],
+  isTradingWalletProvisioned: false,
+  feeWalletAddress: null,
+  feeWalletBalance: '0.00',
+  isFeeWalletProvisioned: false,
   authMethod: null,
   authStatusMessage: null,
   loginWithGoogle: async () => {},
-  loginWithEOA: async () => {},
   logout: () => {},
   authError: null,
   refreshBalance: async () => {},
+  refreshTradingWallet: async () => {},
   loginResult: null,
   circleWallets: [],
   executeChallenge: async () => { throw new Error("executeChallenge not implemented"); },
@@ -104,10 +199,6 @@ type Wallet = {
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
 export function CircleWalletProvider({ children }: { children: React.ReactNode }) {
-  // ── Privy State ────────────────────────────────────────────────────────────
-  const { ready: privyReady, authenticated: privyAuthenticated, user, login: privyLogin, logout: privyLogout } = usePrivy();
-  const { wallets: privyWallets } = useWallets();
-
   // ── Circle State ───────────────────────────────────────────────────────────
   const sdkRef = useRef<W3SSdk | null>(null);
   const [sdkReady, setSdkReady] = useState(false);
@@ -130,24 +221,32 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
   const [circleWallets, setCircleWallets] = useState<Wallet[]>([]);
 
   // ── Shared State ───────────────────────────────────────────────────────────
-  const [usdcBalance, setUsdcBalance] = useState('0.00');
+  const [usdcBalance, setUsdcBalance] = useState('0.00'); // Wallet balance (balanceOf)
+  const [spendingBalance, setSpendingBalance] = useState('0.00'); // Spending balance (Gateway availableBalance)
+  const [tradingWalletAddress, setTradingWalletAddress] = useState<string | null>(null);
+  const [tradingWalletBalance, setTradingWalletBalance] = useState('0.00');
+  const [tradingWalletHoldings, setTradingWalletHoldings] = useState<{ symbol: string; name: string; balance: string; address: string }[]>([]);
+  const [isTradingWalletProvisioned, setIsTradingWalletProvisioned] = useState(false);
+  const [feeWalletAddress, setFeeWalletAddress] = useState<string | null>(null);
+  const [feeWalletBalance, setFeeWalletBalance] = useState('0.00');
+  const [isFeeWalletProvisioned, setIsFeeWalletProvisioned] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authStatusMessage, setAuthStatusMessage] = useState<string | null>(null);
+  const [authInProgress, setAuthInProgress] = useState(false);
   const balancePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tradingWalletPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Determine active connection
-  const activePrivyWallet = user?.wallet?.address ?? privyWallets?.[0]?.address ?? null;
-  const isPrivyConnected = privyReady && privyAuthenticated && !!activePrivyWallet;
-  
-  const activeCircleWallet = circleWallets[0]?.address ?? null;
-  const isCircleConnected = !!activeCircleWallet;
-
-  const isConnected = isPrivyConnected || isCircleConnected;
-  const walletAddress = isCircleConnected ? activeCircleWallet : (isPrivyConnected ? activePrivyWallet : null);
-  const authMethod = isCircleConnected ? 'circle_google' : (isPrivyConnected ? 'privy' : null);
+  // Determine active Circle connection
+  const cachedUserAddress = typeof window !== 'undefined' ? window.localStorage.getItem('circle_user_address') : null;
+  const activeCircleWallet = circleWallets[0]?.address ?? cachedUserAddress ?? null;
+  const isConnected = !!activeCircleWallet;
+  const walletAddress = activeCircleWallet;
+  const authMethod = isConnected ? 'circle_google' : null;
 
   // ── Circle SDK Initialization ──────────────────────────────────────────────
   useEffect(() => {
+    if (!APP_ID) return;
+
     let cancelled = false;
 
     const initSdk = async () => {
@@ -157,8 +256,10 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
         const onLoginComplete = (error: unknown, result: any) => {
           if (cancelled) return;
           if (error) {
+            const msg = (error as any)?.message || String(error);
+            if (msg.includes('AbortError') || msg.includes('signal is aborted') || msg.includes('app config')) return;
             console.error('Circle login failed:', error);
-            setAuthError((error as any).message || 'Circle login failed');
+            setAuthError(msg || 'Circle login failed');
             setLoginResult(null);
             setAuthStatusMessage('Login failed');
             return;
@@ -170,7 +271,7 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
           if (typeof window !== 'undefined') window.localStorage.setItem('circle_login_result', JSON.stringify(newResult));
           setLoginResult(newResult);
           setAuthError(null);
-          setAuthStatusMessage('Login successful. Credentials received from Google. Initializing user...');
+          setAuthStatusMessage('Login successful. Initializing Agent Wallet...');
         };
 
         const restoredAppId = (getCookie('appId') as string) || APP_ID || '';
@@ -195,8 +296,11 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
         sdkRef.current = sdk;
 
         if (!cancelled) setSdkReady(true);
-      } catch (err) {
-        console.error('Failed to init Web SDK:', err);
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        if (!msg.includes('AbortError') && !msg.includes('signal is aborted') && !msg.includes('app config')) {
+          console.error('Failed to init Circle Web SDK:', err);
+        }
       }
     };
 
@@ -227,7 +331,7 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
     if (sdkReady) void fetchDeviceId();
   }, [sdkReady]);
 
-  // ── Step 1: Create Device Token (triggered during loginWithGoogle) ────────
+  // ── Step 1: Create Device Token ───────────────────────────────────────────
   const ensureDeviceToken = async (): Promise<boolean> => {
     if (deviceToken && deviceEncryptionKey) return true;
     if (!deviceId) {
@@ -262,17 +366,16 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
 
   // ── Step 2: Trigger Google Login ───────────────────────────────────────────
   const loginWithGoogle = async () => {
-    if (isPrivyConnected) await privyLogout(); // Cannot be logged into both
-
     if (!sdkRef.current) {
-      setAuthError('Circle SDK not initialized yet.');
+      setAuthError('Circle SDK not initialized yet. Please refresh the page and try again.');
       return;
     }
     
+    setAuthInProgress(true);
+    setAuthError(null);
     const tokenReady = await ensureDeviceToken();
-    if (!tokenReady) return;
+    if (!tokenReady) { setAuthInProgress(false); return; }
 
-    // Persist config for redirect return
     setCookie('appId', APP_ID);
     setCookie('google.clientId', GOOGLE_CLIENT_ID);
     
@@ -293,13 +396,13 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
     sdkRef.current.performLogin(SocialLoginProvider.GOOGLE);
   };
 
-  // ── Step 3: Handle User Initialization (runs after redirect returns) ───────
+  // ── Step 3: Handle User Initialization ─────────────────────────────────────
   useEffect(() => {
     if (!loginResult?.userToken) return;
 
     const initializeUser = async () => {
       try {
-        setAuthStatusMessage('Checking wallet status...');
+        setAuthStatusMessage('Checking agent wallet status...');
         const response = await fetch('/api/endpoints', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -314,7 +417,6 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
             return;
           }
           if (data.code === 155106) {
-            // User already initialized, just load their wallets
             await loadCircleWallets(loginResult.userToken);
             return;
           }
@@ -322,11 +424,14 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
           return;
         }
 
-        // Needs to create a wallet -> challenge
         setChallengeId(data.challengeId);
-        setAuthStatusMessage('Waiting for wallet creation authorization...');
-      } catch (err) {
-        setAuthError('Failed to initialize user session.');
+        setAuthStatusMessage('Waiting for Agent Wallet creation authorization...');
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        if (!msg.includes('AbortError') && !msg.includes('signal is aborted')) {
+          setAuthError('Failed to initialize user session.');
+        }
+        setAuthInProgress(false);
       }
     };
 
@@ -349,7 +454,7 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
           return;
         }
         
-        setAuthStatusMessage('Wallet created! Loading details...');
+        setAuthStatusMessage('Agent Wallet created! Loading details...');
         setTimeout(() => {
           setChallengeId(null);
           void loadCircleWallets(loginResult.userToken);
@@ -363,7 +468,7 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
   // ── Helper: Load Circle Wallets ────────────────────────────────────────────
   const loadCircleWallets = async (userToken: string) => {
     try {
-      setAuthStatusMessage('Loading wallets...');
+      setAuthStatusMessage('Loading Agent Wallet details...');
       const response = await fetch('/api/endpoints', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -375,9 +480,11 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
         if (response.status === 401) {
           console.warn("Circle userToken expired. Logging out...");
           unifiedLogout();
+          setAuthInProgress(false);
           return;
         }
         setAuthError('Failed to load wallet details.');
+        setAuthInProgress(false);
         return;
       }
       
@@ -385,49 +492,121 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
       setCircleWallets(fetchedWallets);
       
       if (fetchedWallets.length > 0) {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem('circle_user_address', fetchedWallets[0].address);
+        }
         setAuthStatusMessage(null); // Success
+        setAuthInProgress(false);
       } else {
-        setAuthError('No wallets found for this user.');
+        setAuthError('No Agent Wallets found for this user.');
+        setAuthInProgress(false);
       }
     } catch (err) {
       setAuthError('Error fetching wallets.');
+      setAuthInProgress(false);
     }
   };
 
   // ── Logout Handler ─────────────────────────────────────────────────────────
   const unifiedLogout = () => {
-    if (isPrivyConnected) privyLogout();
-    if (typeof window !== 'undefined') window.localStorage.removeItem('circle_login_result');
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem('circle_login_result');
+      window.localStorage.removeItem('circle_user_address');
+    }
     setLoginResult(null);
     setCircleWallets([]);
     setUsdcBalance('0.00');
+    setSpendingBalance('0.00');
+    setTradingWalletAddress(null);
+    setTradingWalletBalance('0.00');
+    setIsTradingWalletProvisioned(false);
     setAuthStatusMessage(null);
   };
 
   // ── Balance Polling ────────────────────────────────────────────────────────
   const refreshBalance = useCallback(async (addr: Address) => {
-    // If it's a circle wallet, we could theoretically fetch from the Circle API
-    // but fetching directly from ARC testnet via Viem is faster and unified.
-    const bal = await fetchUsdcBalance(addr);
-    setUsdcBalance(bal);
+    // Fetch agent wallet on-chain balance
+    const wBal = await fetchUsdcBalance(addr);
+    if (wBal !== null && wBal !== undefined) setUsdcBalance(wBal);
+
+    await new Promise(res => setTimeout(res, 200));
+
+    // Gateway spending balance is queried for the Fee Wallet address
+    const targetFeeAddr = (feeWalletAddress as Address) || addr;
+    const sBal = await fetchGatewayBalance(targetFeeAddr);
+    if (sBal !== null && sBal !== undefined) setSpendingBalance(sBal);
+  }, [feeWalletAddress]);
+
+
+  // ── refreshTradingWallet ───────────────────────────────────────────────────
+  const refreshTradingWallet = useCallback(async (addr: string) => {
+    try {
+      const res = await fetch(`/api/agents/trading-wallet?userAddress=${encodeURIComponent(addr)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      
+      setIsTradingWalletProvisioned(data.provisioned ?? false);
+      if (data.tradingWalletAddress) {
+        setTradingWalletAddress(data.tradingWalletAddress);
+      }
+      if (data.balance !== undefined && data.balance !== null) {
+        setTradingWalletBalance(data.balance);
+      }
+      if (Array.isArray(data.holdings)) {
+        setTradingWalletHoldings(data.holdings);
+      }
+
+      setIsFeeWalletProvisioned(data.feeWalletProvisioned ?? false);
+      if (data.feeWalletAddress) {
+        setFeeWalletAddress(data.feeWalletAddress);
+        // Fetch Gateway balance immediately for the user's Fee Wallet address
+        const gBal = await fetchGatewayBalance(data.feeWalletAddress as Address);
+        if (gBal !== null && gBal !== undefined) {
+          setSpendingBalance(gBal);
+        }
+      }
+      if (data.feeWalletBalance !== undefined && data.feeWalletBalance !== null) {
+        setFeeWalletBalance(data.feeWalletBalance);
+      }
+    } catch (err) {
+      console.warn('[CircleWalletProvider] refreshTradingWallet error:', err);
+    }
   }, []);
 
   useEffect(() => {
     if (isConnected && walletAddress) {
       void refreshBalance(walletAddress as Address);
       if (balancePollRef.current) clearInterval(balancePollRef.current);
-      balancePollRef.current = setInterval(() => void refreshBalance(walletAddress as Address), 30_000);
+      // Poll balance every 10 seconds for real-time responsiveness
+      balancePollRef.current = setInterval(() => void refreshBalance(walletAddress as Address), 10_000);
+
+      // Trading wallet: initial fetch + 15s poll
+      void refreshTradingWallet(walletAddress);
+      if (tradingWalletPollRef.current) clearInterval(tradingWalletPollRef.current);
+      tradingWalletPollRef.current = setInterval(() => void refreshTradingWallet(walletAddress), 15_000);
     } else {
       if (balancePollRef.current) {
         clearInterval(balancePollRef.current);
         balancePollRef.current = null;
       }
+      if (tradingWalletPollRef.current) {
+        clearInterval(tradingWalletPollRef.current);
+        tradingWalletPollRef.current = null;
+      }
       setUsdcBalance('0.00');
+      setSpendingBalance('0.00');
+      setTradingWalletAddress(null);
+      setTradingWalletBalance('0.00');
+      setIsTradingWalletProvisioned(false);
+      setFeeWalletAddress(null);
+      setFeeWalletBalance('0.00');
+      setIsFeeWalletProvisioned(false);
     }
     return () => {
       if (balancePollRef.current) clearInterval(balancePollRef.current);
+      if (tradingWalletPollRef.current) clearInterval(tradingWalletPollRef.current);
     };
-  }, [isConnected, walletAddress, refreshBalance]);
+  }, [isConnected, walletAddress, feeWalletAddress, refreshBalance, refreshTradingWallet]);
 
   const executeChallenge = useCallback((challengeId: string): Promise<unknown> => {
     return new Promise((resolve, reject) => {
@@ -455,15 +634,65 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
     });
   }, [loginResult]);
 
+  const signTypedData = useCallback(async (
+    domain: Record<string, any>,
+    types: Record<string, any>,
+    value: Record<string, any>
+  ): Promise<string> => {
+    if (!loginResult?.userToken || !circleWallets?.[0]?.id) {
+      throw new Error("Circle wallet not authenticated");
+    }
+
+    const typedData = {
+      domain,
+      types,
+      primaryType: Object.keys(types)[0],
+      message: value,
+    };
+
+    const signRes = await fetch('/api/endpoints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'signTypedData',
+        userToken: loginResult.userToken,
+        walletId: circleWallets[0].id,
+        typedData,
+      }),
+    });
+
+    const signJson = await signRes.json();
+    if (!signRes.ok) {
+      throw new Error(signJson.message ?? signJson.error ?? 'signTypedData failed');
+    }
+
+    const { challengeId } = signJson;
+    if (!challengeId) throw new Error('No challengeId returned from signTypedData');
+
+    const challengeResult = await executeChallenge(challengeId) as { data?: { signature?: string } };
+    const sig = challengeResult?.data?.signature;
+    if (!sig) throw new Error('Failed to obtain signature from challenge');
+    return sig;
+  }, [loginResult, circleWallets, executeChallenge]);
+
   const value: CircleWalletContextValue = {
     isConnected,
-    isConnecting: !privyReady || deviceIdLoading || !!authStatusMessage,
+    isConnecting: authInProgress,
     walletAddress,
     usdcBalance,
+    walletBalance: usdcBalance,
+    spendingBalance,
+    setSpendingBalance,
+    tradingWalletAddress,
+    tradingWalletBalance,
+    tradingWalletHoldings,
+    isTradingWalletProvisioned,
+    feeWalletAddress,
+    feeWalletBalance,
+    isFeeWalletProvisioned,
     authMethod,
     authStatusMessage,
     loginWithGoogle,
-    loginWithEOA: async () => privyLogin(),
     logout: unifiedLogout,
     authError,
     refreshBalance: async () => {
@@ -471,9 +700,15 @@ export function CircleWalletProvider({ children }: { children: React.ReactNode }
         await refreshBalance(walletAddress as Address);
       }
     },
+    refreshTradingWallet: async () => {
+      if (walletAddress) {
+        await refreshTradingWallet(walletAddress);
+      }
+    },
     loginResult,
     circleWallets,
     executeChallenge,
+    signTypedData,
   };
 
   return (
@@ -490,9 +725,9 @@ export function useCircleWallet(): CircleWalletContextValue {
 }
 
 export function useWalletDisplay() {
-  const { walletAddress, isConnected, usdcBalance, authMethod, authStatusMessage } = useCircleWallet();
+  const { walletAddress, isConnected, usdcBalance, walletBalance, spendingBalance, authMethod, authStatusMessage } = useCircleWallet();
   const shortAddress = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
     : null;
-  return { shortAddress, isConnected, usdcBalance, authMethod, authStatusMessage };
+  return { shortAddress, isConnected, usdcBalance, walletBalance, spendingBalance, authMethod, authStatusMessage };
 }

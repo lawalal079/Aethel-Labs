@@ -6,8 +6,9 @@ import { useWalletDisplay, useCircleWallet } from './components/providers/Circle
 import { useApp } from './context';
 
 export default function Header() {
-  const { shortAddress, usdcBalance, isConnected, authStatusMessage } = useWalletDisplay();
-  const { loginWithGoogle, loginWithEOA, logout, isConnecting, walletAddress } = useCircleWallet();
+  const [mounted, setMounted] = useState(false);
+  const { shortAddress, walletBalance, spendingBalance, isConnected, authStatusMessage } = useWalletDisplay();
+  const { loginWithGoogle, logout, isConnecting, walletAddress, feeWalletAddress, feeWalletBalance } = useCircleWallet();
   const { topUpBalance, executionLogs } = useApp();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [notifsOpen, setNotifsOpen] = useState(false);
@@ -17,9 +18,18 @@ export default function Header() {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => { setMounted(true); }, []);
+
+  const isActuallyConnected = mounted && isConnected;
+
+  const displayFeeAddress = feeWalletAddress ?? null;
+  const shortFeeAddress = feeWalletAddress
+    ? `${feeWalletAddress.slice(0, 6)}...${feeWalletAddress.slice(-4)}`
+    : 'Provisioning...';
+
   const handleCopy = () => {
-    if (walletAddress) {
-      navigator.clipboard.writeText(walletAddress);
+    if (displayFeeAddress) {
+      navigator.clipboard.writeText(displayFeeAddress);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -45,14 +55,14 @@ export default function Header() {
 
         {/* ── Logo ─────────────────────────────────────────────────────── */}
         <div className="flex items-center gap-8">
-          <h1 className="text-2xl font-bold text-white tracking-wide" 
-              style={{ textShadow: '-2px 0 #00F0FF, 2px 0 #FF4A1C' }}>
+          <h1 className="text-2xl font-bold text-white tracking-wide"
+            style={{ textShadow: '-2px 0 #00F0FF, 2px 0 #FF4A1C' }}>
             Æthel Labs
           </h1>
         </div>
 
-        {/* ── Right-side controls ───────────────────────────────────────── */}
-        <div className="flex items-center gap-4 relative">
+        {/* ── Right Actions ────────────────────────────────────────────── */}
+        <div className="flex items-center gap-4">
 
           {/* Notifications */}
           <div className="relative" ref={notifRef}>
@@ -62,42 +72,26 @@ export default function Header() {
               className="text-[#8a8f98] hover:text-white cursor-pointer transition-colors p-1.5 rounded-lg relative"
             >
               <Bell size={20} />
-              {(executionLogs?.length ?? 0) > 0 && (
-                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-rose-500 rounded-full animate-pulse"></span>
+              {(executionLogs ?? []).length > 0 && (
+                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[#00F0FF] animate-pulse" />
               )}
             </button>
-            
+
             {notifsOpen && (
-              <div className="absolute top-full mt-2 right-0 bg-[#131619] border border-[#23272C] rounded-xl w-72 shadow-2xl z-50 overflow-hidden flex flex-col">
-                <div className="px-4 py-3 border-b border-[#23272C] flex items-center justify-between bg-[#1A1D20]">
-                  <h4 className="text-xs font-bold text-white uppercase tracking-widest">Notifications</h4>
-                  <span className="text-[10px] text-[#8a8f98]">{executionLogs?.length ?? 0}</span>
+              <div className="absolute right-0 top-full mt-2 w-80 bg-[#131619] border border-[#23272C] rounded-2xl shadow-2xl p-4 z-50 flex flex-col gap-3">
+                <div className="flex justify-between items-center border-b border-[#23272C] pb-2">
+                  <span className="text-xs font-bold text-white tracking-wider uppercase">Execution Logs</span>
+                  <span className="text-[10px] text-[#8a8f98] font-mono">{(executionLogs ?? []).length} events</span>
                 </div>
-                <div className="max-h-80 overflow-y-auto custom-scrollbar">
-                  {(!executionLogs || executionLogs.length === 0) ? (
-                    <div className="p-6 text-center text-[#8a8f98] text-xs">No notifications yet</div>
+                <div className="max-h-60 overflow-y-auto flex flex-col gap-2">
+                  {(executionLogs ?? []).length === 0 ? (
+                    <span className="text-xs text-[#8a8f98] py-4 text-center">No execution logs yet.</span>
                   ) : (
-                    <div className="flex flex-col">
-                      {executionLogs.map(log => (
-                        <div key={log.id} className="p-3 border-b border-[#23272C] hover:bg-[#1A1D20]/50 transition-colors flex flex-col gap-1.5">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-semibold text-white">{log.agent_name}</span>
-                            <span className="text-[10px] text-[#8a8f98]">{log.timestamp.split('·')[0].trim()}</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                              log.status === 'SUCCESS' ? 'text-emerald-400 bg-emerald-400/10' :
-                              'text-rose-400 bg-rose-400/10'
-                            }`}>
-                              {log.status}
-                            </span>
-                            <span className={`text-[10px] font-mono font-bold ${log.cost_usdc < 0 ? 'text-emerald-400' : 'text-[#8a8f98]'}`}>
-                              {log.cost_usdc < 0 ? '+' : log.cost_usdc === 0 ? '' : '-'}{Math.abs(log.cost_usdc).toFixed(4)} USDC
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                    (executionLogs ?? []).slice(0, 5).map((log, i) => (
+                      <div key={i} className="p-2.5 bg-[#1A1D20] border border-[#2A2F35] rounded-xl flex flex-col gap-1">
+                        <p className="text-[11px] text-[#8a8f98] line-clamp-2 leading-tight">{log.tx_type} — {log.status}</p>
+                      </div>
+                    ))
                   )}
                 </div>
               </div>
@@ -112,38 +106,22 @@ export default function Header() {
             <Question size={20} />
           </button>
 
-          {/* ── Connect Buttons ─────────────────────────────────────────── */}
-          {!isConnected ? (
+          {/* ── Connect Button ─────────────────────────────────────────── */}
+          {!isActuallyConnected ? (
             <div className="relative" ref={dropdownRef}>
-              <div className="flex items-center gap-2">
-                <button
-                  id="header-connect-wallet-btn"
-                  onClick={loginWithEOA}
-                  type="button"
-                  disabled={isConnecting}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold tracking-wider transition-all duration-200 active:scale-95 flex items-center gap-2 bg-[#4E8981]/10 hover:bg-[#4E8981]/20 border border-[#4E8981]/30 text-[#4E8981]"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="2" y="5" width="20" height="14" rx="2" />
-                    <path d="M16 12h.01" />
-                  </svg>
-                  Connect Wallet
-                </button>
-                <button
-                  id="header-social-login-btn"
-                  onClick={loginWithGoogle}
-                  type="button"
-                  disabled={isConnecting}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold tracking-wider transition-all duration-200 active:scale-95 flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <path d="M12 8v8" />
-                    <path d="M8 12h8" />
-                  </svg>
-                  Social Login
-                </button>
-              </div>
+              <button
+                id="header-connect-wallet-btn"
+                onClick={loginWithGoogle}
+                type="button"
+                disabled={isConnecting}
+                className="px-4 py-2 rounded-xl text-xs font-semibold tracking-wider transition-all duration-200 active:scale-95 flex items-center gap-2 bg-[#4E8981]/10 hover:bg-[#4E8981]/20 border border-[#4E8981]/30 text-[#4E8981]"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="5" width="20" height="14" rx="2" />
+                  <path d="M16 12h.01" />
+                </svg>
+                Connect Agent Wallet
+              </button>
 
               {/* Status Indicator (for Circle Challenge/Login flow) */}
               {authStatusMessage && (
@@ -158,16 +136,16 @@ export default function Header() {
               <button
                 id="header-account-btn"
                 onClick={() => setModalOpen(true)}
-                title="View wallet details"
+                title="View Fee Wallet details"
                 type="button"
                 className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[#4E8981]/10 hover:bg-[#4E8981]/20 border border-[#4E8981]/30 hover:border-[#4E8981]/50 text-[#4E8981] transition-all duration-200 active:scale-95"
               >
                 <div className="w-4 h-4 rounded-full bg-[#4E8981]/40 flex items-center justify-center">
                   <span className="text-[8px] font-bold text-[#4E8981]">
-                    {shortAddress?.slice(0, 2).toUpperCase() || 'W'}
+                    {shortFeeAddress?.slice(0, 2).toUpperCase() || 'FW'}
                   </span>
                 </div>
-                {shortAddress}
+                {shortFeeAddress}
               </button>
             </div>
           )}
@@ -175,7 +153,7 @@ export default function Header() {
       </div>
 
       {/* ── Wallet Details Modal ─────────────────────────────────────── */}
-      {modalOpen && isConnected && (
+      {modalOpen && isActuallyConnected && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           {/* Modal Backdrop click to close */}
           <div className="absolute inset-0" onClick={() => setModalOpen(false)} />
@@ -200,9 +178,9 @@ export default function Header() {
 
             {/* Wallet Address section */}
             <div className="flex flex-col gap-1.5">
-              <span className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider">Wallet Address</span>
+              <span className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider">Fee Wallet Address</span>
               <div className="flex items-center justify-between p-3 bg-[#1A1D20] border border-[#2A2F35] rounded-xl gap-2">
-                <span className="font-mono text-xs text-white truncate flex-1">{walletAddress}</span>
+                <span className="font-mono text-xs text-white truncate flex-1">{displayFeeAddress || 'Provisioning...'}</span>
                 <button
                   onClick={handleCopy}
                   className="p-1.5 rounded-lg hover:bg-white/5 text-[#8a8f98] hover:text-white transition-colors cursor-pointer flex-shrink-0"
@@ -222,12 +200,24 @@ export default function Header() {
               </div>
             </div>
 
-
+            {/* Balances section (Wallet Balance vs Spending Balance) */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1 p-3 bg-[#1A1D20] border border-[#2A2F35] rounded-xl">
+                <span className="text-[9px] font-bold text-[#8a8f98] uppercase tracking-wider">Wallet Balance</span>
+                <span className="font-mono text-sm font-bold text-white">{feeWalletBalance} <span className="text-[10px] text-[#8a8f98] font-normal">USDC</span></span>
+                <span className="text-[8px] text-[#8a8f98]">On-chain (balanceOf)</span>
+              </div>
+              <div className="flex flex-col gap-1 p-3 bg-[#1A1D20] border border-[#4E8981]/30 rounded-xl">
+                <span className="text-[9px] font-bold text-[#4E8981] uppercase tracking-wider">Spending Balance</span>
+                <span className="font-mono text-sm font-bold text-white">{feeWalletBalance} <span className="text-[10px] text-[#8a8f98] font-normal">USDC</span></span>
+                <span className="text-[8px] text-[#8a8f98]">Gateway (task fees)</span>
+              </div>
+            </div>
 
             {/* Funding / Deposit Section */}
             <div className="flex flex-col gap-3">
               <div className="flex justify-between items-center">
-                <span className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider">Deposit & Fund</span>
+                <span className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider">Deposit &amp; Fund</span>
                 <button
                   onClick={() => setShowQr(!showQr)}
                   className="text-[10px] text-[#4E8981] hover:text-[#5fa399] transition-colors"
@@ -236,10 +226,10 @@ export default function Header() {
                 </button>
               </div>
 
-              {showQr && walletAddress && (
+              {showQr && displayFeeAddress && (
                 <div className="flex flex-col items-center justify-center p-3 bg-white rounded-xl mx-auto w-full max-w-[180px] transition-all">
                   <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${walletAddress}`}
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${displayFeeAddress}`}
                     alt="Wallet QR Code"
                     className="w-[120px] h-[120px]"
                   />
@@ -250,7 +240,7 @@ export default function Header() {
               )}
 
               <div className="text-[11px] text-[#8a8f98] leading-relaxed bg-[#1A1D20]/50 border border-[#2A2F35]/40 rounded-xl p-3">
-                Send <span className="text-white font-medium">USDC (ARC Testnet)</span> to this wallet address to fund your account.
+                Send <span className="text-white font-medium">USDC (ARC Testnet)</span> to this wallet address to fund your fee float.
               </div>
             </div>
 

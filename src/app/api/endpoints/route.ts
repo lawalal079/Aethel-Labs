@@ -87,7 +87,7 @@ export async function POST(request: Request) {
             },
             body: JSON.stringify({
               idempotencyKey: crypto.randomUUID(),
-              accountType: "SCA",
+              accountType: "EOA",
               blockchains: ["ARC-TESTNET"],
             }),
           },
@@ -235,6 +235,82 @@ export async function POST(request: Request) {
         return NextResponse.json(data.data, { status: 200 });
       }
 
+      case "signTypedData": {
+        const { userToken, walletId, typedData } = params;
+        if (!userToken || !walletId || !typedData) {
+          return NextResponse.json(
+            { error: "Missing required parameters: userToken, walletId, typedData" },
+            { status: 400 },
+          );
+        }
+
+        const response = await fetch(
+          `${CIRCLE_BASE_URL}/v1/w3s/user/sign/typedData`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${CIRCLE_API_KEY}`,
+              "X-User-Token": userToken,
+            },
+            body: JSON.stringify({
+              idempotencyKey: crypto.randomUUID(),
+              walletId,
+              data: JSON.stringify(typedData),
+            }),
+          },
+        );
+
+        const data = await response.json();
+        if (!response.ok) {
+          console.warn("Circle API error (signTypedData):", response.status, data);
+          return NextResponse.json(data, { status: response.status });
+        }
+
+        // Returns: { challengeId, id }
+        return NextResponse.json(data.data, { status: 200 });
+      }
+
+      case "getSignature": {
+        const { userToken, id } = params;
+        if (!userToken || !id) {
+          return NextResponse.json(
+            { error: "Missing userToken or signature id" },
+            { status: 400 },
+          );
+        }
+
+        const response = await fetch(
+          `${CIRCLE_BASE_URL}/v1/w3s/user/challenges/${id}`,
+          {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${CIRCLE_API_KEY}`,
+              "X-User-Token": userToken,
+            },
+          },
+        );
+
+        const data = await response.json();
+        if (!response.ok) {
+          console.warn("Circle API error (getSignature/challenges):", response.status, data);
+          return NextResponse.json(data, { status: response.status });
+        }
+
+        const challenge = data.data?.challenge ?? data.data;
+        const state = challenge?.state ?? challenge?.status;
+        console.log("[endpoints] Challenge poll state:", state, "| raw keys:", Object.keys(challenge ?? {}));
+
+        // Extract the signature once the challenge is COMPLETE
+        const signature =
+          challenge?.signedData?.signature ??
+          challenge?.signature ??
+          challenge?.result?.signature ??
+          null;
+
+        return NextResponse.json({ state, status: state, signature }, { status: 200 });
+      }
+
       case "listTransactions": {
         const { userToken } = params;
         if (!userToken) {
@@ -266,7 +342,7 @@ export async function POST(request: Request) {
 
       case "executeDirective": {
         // Secure console proxy: verifies on-chain license ownership before routing
-        const { userAddress, agentId, directive } = params;
+        const { userAddress, agentId, directive, txHash } = params;
 
         if (!userAddress || !agentId || !directive) {
           return NextResponse.json(
@@ -306,12 +382,41 @@ export async function POST(request: Request) {
           );
         }
 
-        // License verified — echo directive back (stub; replace with real worker routing)
-        console.log(`[executeDirective] agent=${agentId} user=${userAddress} directive:`, directive);
-        return NextResponse.json(
-          { status: 'queued', agentId, message: `Directive accepted for "${agentId}" — routing to worker pipeline.` },
-          { status: 200 },
-        );
+        // License verified — route to Æthel Engine dispatcher!
+        const engineUrl = process.env.NEXT_PUBLIC_ENGINE_URL || 'http://localhost:4000';
+        try {
+          const dispatchRes = await fetch(`${engineUrl}/dispatch`, {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json',
+              'x-verified-client-address': userAddress
+            },
+
+            body: JSON.stringify({
+              intent: directive,
+              agentType: agentId,
+              txHash: txHash || '0x' + '0'.repeat(40),
+              buyerAddress: userAddress
+            })
+          });
+
+          const dispatchData = await dispatchRes.json();
+
+          if (!dispatchRes.ok) {
+            return NextResponse.json(
+              { error: dispatchData.error || 'Engine dispatch failed' },
+              { status: dispatchRes.status }
+            );
+          }
+
+          return NextResponse.json(dispatchData, { status: 200 });
+        } catch (dispatchErr) {
+          console.error('[executeDirective] Failed to reach engine:', dispatchErr);
+          return NextResponse.json(
+            { error: `Connection failed: Æthel Engine at ${engineUrl} is unreachable.` },
+            { status: 502 }
+          );
+        }
       }
 
       default:
