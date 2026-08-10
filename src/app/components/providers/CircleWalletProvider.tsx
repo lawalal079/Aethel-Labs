@@ -78,14 +78,31 @@ async function fetchUsdcBalance(address: Address): Promise<string> {
   }
 }
 
-/** Spending balance — Gateway's available balance via Circle /v1/balances API + contract fallback */
+/** Spending balance — Gateway's available balance via on-chain contract + API fallback */
 async function fetchGatewayBalance(address: Address): Promise<string> {
   if (!address) return '0.00';
   try {
     const checksummed = getAddress(address);
     
-    // 1. Query Circle Gateway /v1/balances API endpoint (Arc Testnet domain 26)
-    // This is the EXACT withdrawable balance limit enforced by Circle Gateway API
+    // 1. Primary: On-chain GatewayWallet.availableBalance (reflects immediate on-chain state)
+    try {
+      const raw = await withRetry(() =>
+        publicClient.readContract({
+          address: getAddress(GATEWAY_WALLET_ADDRESS),
+          abi: GATEWAY_ABI,
+          functionName: 'availableBalance',
+          args: [getAddress(USDC_ADDRESS), checksummed],
+        })
+      );
+      const val = parseFloat(formatUnits(raw as bigint, 6)).toFixed(6);
+      if (val !== undefined && val !== null && !isNaN(parseFloat(val))) {
+        return val;
+      }
+    } catch (onChainErr) {
+      console.warn('[CircleWalletProvider] On-chain Gateway read failed, trying API fallback:', onChainErr);
+    }
+
+    // 2. Fallback: Query Circle Gateway /v1/balances REST API endpoint
     try {
       const circleRes = await fetch('https://gateway-api-testnet.circle.com/v1/balances', {
         method: 'POST',
@@ -102,21 +119,9 @@ async function fetchGatewayBalance(address: Address): Promise<string> {
           return parseFloat(found).toFixed(6);
         }
       }
-    } catch (apiErr) {
-      console.warn('[CircleWalletProvider] Circle /v1/balances API error, using contract fallback:', apiErr);
-    }
+    } catch (apiErr) {}
 
-    // 2. Fallback to on-chain GatewayWallet.availableBalance if Circle API is unreachable
-    const raw = await withRetry(() =>
-      publicClient.readContract({
-        address: getAddress(GATEWAY_WALLET_ADDRESS),
-        abi: GATEWAY_ABI,
-        functionName: 'availableBalance',
-        args: [getAddress(USDC_ADDRESS), checksummed],
-      })
-    );
-    return parseFloat(formatUnits(raw as bigint, 6)).toFixed(6);
-
+    return '0.00';
   } catch (err) {
     console.warn('[CircleWalletProvider] fetchGatewayBalance error:', err);
     return '0.00';

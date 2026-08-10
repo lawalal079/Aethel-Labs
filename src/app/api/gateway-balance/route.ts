@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
       console.warn('[gateway-balance] Circle API query error:', err.message);
     }
 
-    const netBalance = circleApiBalance !== null ? circleApiBalance : onChainBalance;
+    const netBalance = onChainBalance !== '0.000000' ? onChainBalance : (circleApiBalance !== null ? circleApiBalance : '0.000000');
 
     return NextResponse.json({
       success: true,
