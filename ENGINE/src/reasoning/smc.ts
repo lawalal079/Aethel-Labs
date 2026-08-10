@@ -45,7 +45,7 @@ export interface SMCContext {
   /** USDC / EURC / cirBTC balances in the Trading Wallet */
   balances: { USDC: string; EURC: string; cirBTC: string };
   /** Open trade position, or null if no position is held */
-  activePosition: { heldAsset: string; entryPrice: number; amount: string; tpPrice?: number; slPrice?: number } | null;
+  activePosition: { heldAsset: string; entryPrice: number; amount: string } | null;
   /** Live asset price (e.g. EUR/USD rate, BTC/USD) */
   currentPrice: number;
   /** Price for the pair expressed as a human-readable label (e.g. "EUR/USD") */
@@ -67,8 +67,6 @@ function buildSystemPrompt(ctx: SMCContext): string {
   - Held Asset: ${ctx.activePosition.heldAsset}
   - Entry Price: ${ctx.activePosition.entryPrice}
   - Amount: ${ctx.activePosition.amount}
-  - Target Take Profit (1:2 R:R): ${ctx.activePosition.tpPrice ?? 'Structure High'}
-  - Target Stop Loss (Structure Low): ${ctx.activePosition.slPrice ?? 'Structure Low'}
   - Unrealised PnL: ${calculatePnl(ctx.activePosition.entryPrice, ctx.currentPrice)}%`
     : 'OPEN POSITION: None (you are in USDC)';
 
@@ -115,10 +113,12 @@ TRADING RULES (each candle above has real O/H/L/C wick data — use it precisely
 2. ENTRY — EUR/USD pair (no open position, requires >= 3 candles):
    - Same pattern rules. If bullish → SWAP: fromToken="USDC", toToken="EURC".
 
-3. TAKE PROFIT (open position, currentPrice >= tpPrice OR structure high hit):
+3. TAKE PROFIT (open position):
+   - Price has reached or exceeded tpPrice (calculated via 1:2 Risk-to-Reward ratio above entry).
    - SWAP held asset back to USDC. patternDetected="TakeProfit".
 
-4. STOP LOSS (open position, currentPrice <= slPrice OR structure low broken):
+4. STOP LOSS (open position):
+   - Price has dropped to or below slPrice (defined by structural patternLow / swing low of entry setup).
    - SWAP held asset back to USDC. patternDetected="StopLoss".
 
 5. HOLD — fewer than 3 candles OR no clear SMC setup visible in the OHLC data.
