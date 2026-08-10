@@ -35,6 +35,7 @@ export interface TradingWallet {
   address: string;
   walletSetId: string;
   refId?: string;
+  privateKey?: `0x${string}`;
 }
 
 const WALLET_SET_NAME = 'aethel-trading-wallets';
@@ -140,6 +141,7 @@ function deriveUserWallet(userRefId: string, isFeeWallet = false): TradingWallet
     address: account.address.toLowerCase(),
     walletSetId: isFeeWallet ? 'e2fcff55-2f29-5fa7-9f1a-b82bdf95365a' : '189a80b4-17a5-5833-9335-1e33378f58b6',
     refId: normRef,
+    privateKey: hash as `0x${string}`,
   };
 }
 

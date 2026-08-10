@@ -1513,8 +1513,13 @@ const server = http.createServer(async (req, res) => {
           }
 
           // EVM direct transaction fallback
-          console.log(`[gateway-deposit] Executing ${label} via EVM signer...`);
-          const txResponse = await ethersWallet.sendTransaction({
+          let signer = ethersWallet;
+          if ((feeWallet as any).privateKey) {
+            signer = new ethers.Wallet((feeWallet as any).privateKey, ethersProvider);
+          }
+
+          console.log(`[gateway-deposit] Executing ${label} via EVM signer ${signer.address}...`);
+          const txResponse = await signer.sendTransaction({
             to: contractAddress,
             data: calldata,
           });
