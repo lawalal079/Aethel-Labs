@@ -1479,35 +1479,47 @@ const server = http.createServer(async (req, res) => {
         const circleClient = getCircleClient();
 
         async function execDepositTx(calldata: string, contractAddress: string, label: string): Promise<string> {
-          const { randomUUID } = await import('crypto');
-          const txRes = await (circleClient as any).createContractExecutionTransaction({
-            idempotencyKey: randomUUID(),
-            walletId:       feeWallet.id,
-            contractAddress,
-            callData:       calldata,
-            fee: { type: 'level', config: { feeLevel: 'MEDIUM' } },
-          });
+          try {
+            const { randomUUID } = await import('crypto');
+            const txRes = await (circleClient as any).createContractExecutionTransaction({
+              idempotencyKey: randomUUID(),
+              walletId:       feeWallet.id,
+              contractAddress,
+              callData:       calldata,
+              fee: { type: 'level', config: { feeLevel: 'MEDIUM' } },
+            });
 
-          const txId = txRes?.data?.id || txRes?.data?.transaction?.id;
-          if (!txId) throw new Error(`Circle returned no transaction ID for ${label}`);
-
-          console.log(`[gateway-deposit] ${label} tx submitted — id=${txId}, polling...`);
-          const TERMINAL = new Set(['COMPLETE', 'FAILED', 'CANCELLED', 'DENIED']);
-          for (let i = 0; i < 60; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const pollRes = await (circleClient as any).getTransaction({ id: txId });
-            const tx = pollRes?.data?.transaction ?? pollRes?.data;
-            if (!tx) continue;
-            const state = (tx.state || tx.status || '').toUpperCase();
-            if (tx.txHash) {
-              try { await publicClient.waitForTransactionReceipt({ hash: tx.txHash as `0x${string}` }); } catch {}
-              return tx.txHash as string;
+            const txId = txRes?.data?.id || txRes?.data?.transaction?.id;
+            if (txId) {
+              console.log(`[gateway-deposit] ${label} tx submitted via Circle API — id=${txId}, polling...`);
+              const TERMINAL = new Set(['COMPLETE', 'FAILED', 'CANCELLED', 'DENIED']);
+              for (let i = 0; i < 60; i++) {
+                await new Promise(r => setTimeout(r, 2000));
+                const pollRes = await (circleClient as any).getTransaction({ id: txId });
+                const tx = pollRes?.data?.transaction ?? pollRes?.data;
+                if (!tx) continue;
+                const state = (tx.state || tx.status || '').toUpperCase();
+                if (tx.txHash) {
+                  try { await publicClient.waitForTransactionReceipt({ hash: tx.txHash as `0x${string}` }); } catch {}
+                  return tx.txHash as string;
+                }
+                if (TERMINAL.has(state) && !tx.txHash) {
+                  throw new Error(`${label} transaction ${state.toLowerCase()}: ${tx.errorReason || 'no reason given'}`);
+                }
+              }
             }
-            if (TERMINAL.has(state) && !tx.txHash) {
-              throw new Error(`${label} transaction ${state.toLowerCase()}: ${tx.errorReason || 'no reason given'}`);
-            }
+          } catch (circleErr: any) {
+            console.warn(`[gateway-deposit] Circle API execution for ${label} warning: ${circleErr?.response?.data?.message || circleErr?.message || circleErr}. Falling back to EVM signer...`);
           }
-          throw new Error(`Timed out waiting for ${label} tx hash (txId=${txId})`);
+
+          // EVM direct transaction fallback
+          console.log(`[gateway-deposit] Executing ${label} via EVM signer...`);
+          const txResponse = await ethersWallet.sendTransaction({
+            to: contractAddress,
+            data: calldata,
+          });
+          const receipt = await txResponse.wait();
+          return receipt?.hash || txResponse.hash;
         }
 
         // Step 1: USDC.approve(gatewayAddress, amount)

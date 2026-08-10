@@ -39,9 +39,6 @@ export interface TradingWallet {
 
 const WALLET_SET_NAME = 'aethel-trading-wallets';
 
-/**
- * In-process cache: refId → TradingWallet.
- */
 const _walletCache = new Map<string, TradingWallet>();
 const _feeWalletCache = new Map<string, FeeWallet>();
 let _platformWalletSetId: string | null = null;
@@ -122,8 +119,15 @@ export function clearWalletCaches() {
 }
 
 /**
+ * Utility to format string into valid RFC-4122 UUID format required by Circle API
+ */
+function toUUID(str: string): string {
+  const hex = keccak256(toBytes(str)).replace('0x', '').slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
  * Derives a unique, deterministic wallet per userRefId as fallback
- * if Circle developer API has not yet assigned an explicit sub-wallet.
  */
 function deriveUserWallet(userRefId: string, isFeeWallet = false): TradingWallet {
   const normRef = userRefId.toLowerCase().trim();
@@ -132,7 +136,7 @@ function deriveUserWallet(userRefId: string, isFeeWallet = false): TradingWallet
   const account = privateKeyToAccount(hash as `0x${string}`);
 
   return {
-    id: `user-${isFeeWallet ? 'fee' : 'trading'}-${normRef}`,
+    id: toUUID(normRef + salt),
     address: account.address.toLowerCase(),
     walletSetId: isFeeWallet ? 'e2fcff55-2f29-5fa7-9f1a-b82bdf95365a' : '189a80b4-17a5-5833-9335-1e33378f58b6',
     refId: normRef,
@@ -155,7 +159,6 @@ export async function getOrAssignTradingWallet(userRefId: string): Promise<Tradi
       return existing;
     }
 
-    // Try creating wallet on Circle API
     const createRes: any = await client.createWallets({
       walletSetId,
       count: 1,
@@ -177,7 +180,6 @@ export async function getOrAssignTradingWallet(userRefId: string): Promise<Tradi
     console.warn(`[TradingWallet] Circle API lookup/creation failed for user ${normRef}:`, err?.message ?? err);
   }
 
-  // Deterministic per-user fallback
   const fallbackWallet = deriveUserWallet(normRef, false);
   _walletCache.set(normRef, fallbackWallet);
   return fallbackWallet;
