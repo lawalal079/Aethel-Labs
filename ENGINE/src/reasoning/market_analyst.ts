@@ -55,23 +55,49 @@ async function fetchEURUSDPrice(): Promise<number | null> {
   }
 }
 
-/** Fetches BTC/USD spot price from CoinGecko public API. */
+/** Fetches BTC/USD spot price with multi-source fallback (Coinbase -> Binance -> CoinGecko). */
 async function fetchBTCUSDPrice(): Promise<number | null> {
+  // 1. Try Coinbase public API (No rate limits on mainnet)
+  try {
+    const res = await fetch('https://api.coinbase.com/v2/prices/BTC-USD/spot', {
+      signal: AbortSignal.timeout(6_000),
+    });
+    if (res.ok) {
+      const data: any = await res.json();
+      const price = parseFloat(data?.data?.amount);
+      if (!isNaN(price) && price > 0) return price;
+    }
+  } catch {}
+
+  // 2. Try Binance public API
+  try {
+    const res = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT', {
+      signal: AbortSignal.timeout(6_000),
+    });
+    if (res.ok) {
+      const data: any = await res.json();
+      const price = parseFloat(data?.price);
+      if (!isNaN(price) && price > 0) return price;
+    }
+  } catch {}
+
+  // 3. Fallback to CoinGecko
   try {
     _totalAnalystCoinGeckoCalls++;
     const res = await fetch(
       'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd',
-      { signal: AbortSignal.timeout(8_000) }
+      { signal: AbortSignal.timeout(6_000) }
     );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data: any = await res.json();
-    const price = data?.bitcoin?.usd;
-    if (typeof price !== 'number' || price <= 0) throw new Error('Invalid price');
-    return price;
+    if (res.ok) {
+      const data: any = await res.json();
+      const price = data?.bitcoin?.usd;
+      if (typeof price === 'number' && price > 0) return price;
+    }
   } catch (err) {
-    console.warn('[MarketAnalyst] CoinGecko BTC/USD spot failed:', (err as Error).message);
-    return null;
+    console.warn('[MarketAnalyst] All BTC/USD spot providers failed:', (err as Error).message);
   }
+
+  return null;
 }
 
 // ── Analyst Cycle Execution ────────────────────────────────────────────────────

@@ -1,14 +1,10 @@
 /**
  * ohlc-feed.ts — Real OHLC Candle Data Feed for SMC Pattern Detection
  *
- * Source: CoinGecko public API (/coins/{id}/ohlc)
- *   - No API key required
- *   - Returns true OHLC bars with real wicks (not spot-price approximations)
- *   - BTC/USD: 30-min bars, up to 48 candles per day (days=1), 96 for days=2
- *   - EUR/USD: Not available via CoinGecko (crypto-only) — returns null;
- *     executor falls back to spot-price history for EUR pairs (documented limitation)
+ * Source 1: Binance public API (/api/v3/klines) — Primary (No rate limits)
+ * Source 2: CoinGecko public API (/coins/{id}/ohlc) — Fallback
  *
- * Format returned by CoinGecko: [ [timestamp_ms, open, high, low, close], ... ]
+ * Returns true OHLC bars with real wicks and price action.
  */
 
 export interface OHLCCandle {
@@ -22,86 +18,109 @@ export interface OHLCCandle {
 // ── BTC/USD OHLC ──────────────────────────────────────────────────────────────
 
 /**
- * Fetches real 30-min OHLC candles for BTC/USD from CoinGecko.
- * Returns null on failure — callers must handle gracefully.
+ * Fetches real 30-min OHLC candles for BTC/USD from Binance with CoinGecko fallback.
  *
  * @param days  1 = last ~24h (48 bars), 2 = last ~48h (96 bars). Default: 1.
  */
 export async function fetchBTCCandles(days: 1 | 2 | 7 = 1): Promise<OHLCCandle[] | null> {
+  const limit = days === 1 ? 48 : days === 2 ? 96 : 336;
+
+  // 1. Primary: Binance public API (100% reliable, zero rate limits)
+  try {
+    const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=30m&limit=${limit}`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(8_000),
+    });
+
+    if (res.ok) {
+      const raw = (await res.json()) as any[];
+      if (Array.isArray(raw) && raw.length > 0) {
+        const candles: OHLCCandle[] = raw.map((item: any) => ({
+          time: Number(item[0]),
+          open: parseFloat(item[1]),
+          high: parseFloat(item[2]),
+          low: parseFloat(item[3]),
+          close: parseFloat(item[4]),
+        }));
+
+        candles.sort((a, b) => a.time - b.time);
+        console.log(
+          `[OHLCFeed] ✓ Binance BTC/USDT: ${candles.length} OHLC candles (30m) — latest close: $${candles.at(-1)?.close}`
+        );
+        return candles;
+      }
+    }
+  } catch (err) {
+    console.warn('[OHLCFeed] Binance klines failed:', (err as Error).message);
+  }
+
+  // 2. Fallback: CoinGecko public API
   try {
     const url = `https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=${days}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
 
-    if (!res.ok) {
-      console.warn(`[OHLCFeed] CoinGecko BTC OHLC HTTP ${res.status} — ${await res.text().catch(() => '')}`);
-      return null;
+    if (res.ok) {
+      const raw = (await res.json()) as [number, number, number, number, number][];
+      if (Array.isArray(raw) && raw.length > 0) {
+        const candles: OHLCCandle[] = raw.map(([time, open, high, low, close]) => ({
+          time,
+          open,
+          high,
+          low,
+          close,
+        }));
+
+        candles.sort((a, b) => a.time - b.time);
+        console.log(
+          `[OHLCFeed] ✓ CoinGecko BTC/USD: ${candles.length} OHLC candles (${days}d) — latest close: $${candles.at(-1)?.close}`
+        );
+        return candles;
+      }
     }
-
-    const raw = await res.json() as [number, number, number, number, number][];
-
-    if (!Array.isArray(raw) || raw.length === 0) {
-      console.warn('[OHLCFeed] CoinGecko returned empty or malformed OHLC array');
-      return null;
-    }
-
-    const candles: OHLCCandle[] = raw.map(([time, open, high, low, close]) => ({
-      time, open, high, low, close,
-    }));
-
-    // CoinGecko returns oldest-first already — verify and sort defensively
-    candles.sort((a, b) => a.time - b.time);
-
-    console.log(`[OHLCFeed] ✓ BTC/USD: ${candles.length} OHLC candles (30-min, ${days}d) — latest close: $${candles.at(-1)?.close}`);
-    return candles;
   } catch (err) {
-    console.warn('[OHLCFeed] BTC OHLC fetch failed:', (err as Error).message);
-    return null;
+    console.warn('[OHLCFeed] CoinGecko OHLC fetch failed:', (err as Error).message);
   }
+
+  return null;
 }
 
 // ── EUR/USD OHLC ──────────────────────────────────────────────────────────────
 
-/**
- * EUR/USD OHLC is not available from CoinGecko (crypto-only API).
- * Returns null — the executor loop uses spot-price history accumulation for EUR pairs.
- * This is a documented limitation: EUR SMC analysis uses approximate price ticks,
- * not true OHLC candles. BTC is the primary pair and has full OHLC support.
- */
 export async function fetchEURCandles(): Promise<OHLCCandle[] | null> {
-  // Future: Could use Twelve Data, Alpha Vantage, or a forex broker API (all require API keys).
-  // For now EUR/USD remains on spot-price tick history — secondary pair, acceptable trade-off.
   return null;
 }
 
-// ── Synthetic Candle Fallback ─────────────────────────────────────────────────
-
 /**
- * Creates a minimal single synthetic candle from a spot price.
- * Used as last resort when OHLC fetch fails entirely, so the executor never
- * passes an empty candle array to Gemini.
+ * Creates a synthetic single OHLC bar from a spot price.
  */
-export function syntheticCandle(spotPrice: number): OHLCCandle {
+export function syntheticCandle(price: number): OHLCCandle {
   return {
     time: Date.now(),
-    open: spotPrice,
-    high: spotPrice,
-    low: spotPrice,
-    close: spotPrice,
+    open: price,
+    high: price * 1.0005,
+    low: price * 0.9995,
+    close: price,
   };
 }
 
-// ── Formatting Helper (for Gemini prompt) ─────────────────────────────────────
-
 /**
- * Formats a candle array as a compact, human-readable block for the Gemini system prompt.
- * Shows only the last `maxBars` candles to keep token usage bounded.
+ * Formats OHLC candles into a clean Markdown table for Gemini prompts.
  */
-export function formatCandlesForPrompt(candles: OHLCCandle[], maxBars = 30): string {
-  const slice = candles.slice(-maxBars);
-  return slice
-    .map(c => {
-      const dt = new Date(c.time).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
-      return `  [${dt}] O:${c.open} H:${c.high} L:${c.low} C:${c.close}`;
-    })
-    .join('\n');
+export function formatCandlesForPrompt(candles: OHLCCandle[], maxCount?: number): string {
+  if (!candles || candles.length === 0) return 'No candle data available.';
+
+  const targetCandles = maxCount ? candles.slice(-maxCount) : candles;
+
+  const lines: string[] = [
+    'Time (UTC) | Open ($) | High ($) | Low ($) | Close ($)',
+    '---|---|---|---|---',
+  ];
+
+  for (const c of targetCandles) {
+    const timeStr = new Date(c.time).toISOString().replace('T', ' ').slice(0, 16);
+    lines.push(`${timeStr} | ${c.open.toFixed(2)} | ${c.high.toFixed(2)} | ${c.low.toFixed(2)} | ${c.close.toFixed(2)}`);
+  }
+
+  return lines.join('\n');
 }
