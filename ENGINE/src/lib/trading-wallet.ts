@@ -2,6 +2,8 @@ import { initiateDeveloperControlledWalletsClient } from '@circle-fin/developer-
 import { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import path from 'path';
+import { keccak256, toBytes } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
@@ -39,10 +41,9 @@ const WALLET_SET_NAME = 'aethel-trading-wallets';
 
 /**
  * In-process cache: refId → TradingWallet.
- * Prevents repeated Circle API calls within one ENGINE process lifetime.
- * Cleared automatically if ENGINE restarts (acceptable — daemon is in-memory anyway).
  */
 const _walletCache = new Map<string, TradingWallet>();
+const _feeWalletCache = new Map<string, FeeWallet>();
 let _platformWalletSetId: string | null = null;
 
 async function findWalletSetByName(
@@ -60,9 +61,6 @@ async function findWalletSetByName(
   return null;
 }
 
-/**
- * Ensures the platform single wallet set exists, or creates one if missing.
- */
 export async function getOrCreatePlatformWalletSet(): Promise<string> {
   if (_platformWalletSetId) return _platformWalletSetId;
   const client = getCircleClient();
@@ -74,20 +72,13 @@ export async function getOrCreatePlatformWalletSet(): Promise<string> {
       return existingId;
     }
   } catch (err) {
-    console.warn("[TradingWallet] Could not list wallet sets, attempting creation...", (err as Error).message);
+    console.warn("[TradingWallet] Could not list wallet sets, attempting fallback...", (err as Error).message);
   }
 
-  // Primary platform wallet set fallback
   _platformWalletSetId = '189a80b4-17a5-5833-9335-1e33378f58b6';
   return _platformWalletSetId;
 }
 
-/**
- * Walk all pages of listWallets for a given walletSetId and return the wallet
- * whose refId matches userRefId, or null if none found.
- * Circle paginates with pageAfter cursor — a simple one-shot listWallets() misses
- * any wallet not on the first page, causing spurious new wallet creation on each call.
- */
 async function findWalletByRefId(
   client: ReturnType<typeof initiateDeveloperControlledWalletsClient>,
   walletSetId: string | undefined,
@@ -102,7 +93,6 @@ async function findWalletByRefId(
     };
 
     const res = await client.listWallets(listParams);
-
     const wallets = res.data?.wallets ?? [];
 
     const found = wallets.find(
@@ -119,7 +109,6 @@ async function findWalletByRefId(
       };
     }
 
-    // Advance cursor — Circle returns nextPageAfter in the response
     const nextCursor = (res.data as any)?.nextPageAfter ?? (res as any)?.nextPageAfter;
     pageAfter = wallets.length === 50 ? nextCursor : undefined;
   } while (pageAfter);
@@ -132,52 +121,151 @@ export function clearWalletCaches() {
   _feeWalletCache.clear();
 }
 
-const OFFICIAL_PRIMARY_TRADING_WALLET: TradingWallet = {
-  id: '5fefcd37-30d3-59aa-b4da-38bc53135187',
-  address: '0x4ddf4c9f5f932247a31212c94f83a796a74c8274',
-  walletSetId: '189a80b4-17a5-5833-9335-1e33378f58b6',
-};
+/**
+ * Derives a unique, deterministic wallet per userRefId as fallback
+ * if Circle developer API has not yet assigned an explicit sub-wallet.
+ */
+function deriveUserWallet(userRefId: string, isFeeWallet = false): TradingWallet {
+  const normRef = userRefId.toLowerCase().trim();
+  const salt = isFeeWallet ? '_aethel_fee_wallet_v2' : '_aethel_trading_wallet_v2';
+  const hash = keccak256(toBytes(normRef + salt));
+  const account = privateKeyToAccount(hash as `0x${string}`);
 
-const OFFICIAL_PRIMARY_FEE_WALLET: FeeWallet = {
-  id: 'c2ab61a7-6359-5f1f-b1ef-e3f236b7a2ed',
-  address: '0xa2d1d149dedec73fc1405ed4525909c6bd80e51b',
-  walletSetId: 'e2fcff55-2f29-5fa7-9f1a-b82bdf95365a',
-};
+  return {
+    id: `user-${isFeeWallet ? 'fee' : 'trading'}-${normRef}`,
+    address: account.address.toLowerCase(),
+    walletSetId: isFeeWallet ? 'e2fcff55-2f29-5fa7-9f1a-b82bdf95365a' : '189a80b4-17a5-5833-9335-1e33378f58b6',
+    refId: normRef,
+  };
+}
 
 export async function getOrAssignTradingWallet(userRefId: string): Promise<TradingWallet> {
-  _walletCache.set(userRefId, OFFICIAL_PRIMARY_TRADING_WALLET);
-  return OFFICIAL_PRIMARY_TRADING_WALLET;
+  const normRef = (userRefId || 'anonymous_user').toLowerCase().trim();
+
+  if (_walletCache.has(normRef)) {
+    return _walletCache.get(normRef)!;
+  }
+
+  try {
+    const client = getCircleClient();
+    const walletSetId = await getOrCreatePlatformWalletSet();
+    const existing = await findWalletByRefId(client, walletSetId, normRef);
+    if (existing) {
+      _walletCache.set(normRef, existing);
+      return existing;
+    }
+
+    // Try creating wallet on Circle API
+    const createRes: any = await client.createWallets({
+      walletSetId,
+      count: 1,
+      blockchains: ['ARC-TESTNET' as any],
+      refId: normRef,
+    } as any);
+    const newW = createRes.data?.wallets?.[0];
+    if (newW?.id && newW?.address) {
+      const walletObj: TradingWallet = {
+        id: newW.id,
+        address: newW.address,
+        walletSetId: newW.walletSetId || walletSetId,
+        refId: normRef,
+      };
+      _walletCache.set(normRef, walletObj);
+      return walletObj;
+    }
+  } catch (err: any) {
+    console.warn(`[TradingWallet] Circle API lookup/creation failed for user ${normRef}:`, err?.message ?? err);
+  }
+
+  // Deterministic per-user fallback
+  const fallbackWallet = deriveUserWallet(normRef, false);
+  _walletCache.set(normRef, fallbackWallet);
+  return fallbackWallet;
 }
 
 export async function getTradingWalletIfExists(userRefId: string): Promise<TradingWallet | null> {
-  _walletCache.set(userRefId, OFFICIAL_PRIMARY_TRADING_WALLET);
-  return OFFICIAL_PRIMARY_TRADING_WALLET;
+  const normRef = (userRefId || 'anonymous_user').toLowerCase().trim();
+
+  if (_walletCache.has(normRef)) {
+    return _walletCache.get(normRef)!;
+  }
+
+  try {
+    const client = getCircleClient();
+    const walletSetId = await getOrCreatePlatformWalletSet();
+    const existing = await findWalletByRefId(client, walletSetId, normRef);
+    if (existing) {
+      _walletCache.set(normRef, existing);
+      return existing;
+    }
+  } catch (err: any) {
+    console.warn(`[TradingWallet] Circle API lookup failed for user ${normRef}:`, err?.message ?? err);
+  }
+
+  const fallbackWallet = deriveUserWallet(normRef, false);
+  _walletCache.set(normRef, fallbackWallet);
+  return fallbackWallet;
 }
 
 // ── Fee Wallet ─────────────────────────────────────────────────────────────────
 
 export type FeeWallet = TradingWallet;
 
-const _feeWalletCache = new Map<string, FeeWallet>();
-
 export async function getOrAssignFeeWallet(userRefId: string): Promise<FeeWallet> {
-  _feeWalletCache.set(userRefId, OFFICIAL_PRIMARY_FEE_WALLET);
-  return OFFICIAL_PRIMARY_FEE_WALLET;
+  const normRef = (userRefId || 'anonymous_user').toLowerCase().trim();
+
+  if (_feeWalletCache.has(normRef)) {
+    return _feeWalletCache.get(normRef)!;
+  }
+
+  try {
+    const client = getCircleClient();
+    const walletSetId = await getOrCreatePlatformWalletSet();
+    const existing = await findWalletByRefId(client, walletSetId, `fee_${normRef}`);
+    if (existing) {
+      _feeWalletCache.set(normRef, existing);
+      return existing;
+    }
+  } catch (err: any) {
+    console.warn(`[FeeWallet] Circle API lookup failed for fee user ${normRef}:`, err?.message ?? err);
+  }
+
+  const fallbackWallet = deriveUserWallet(normRef, true);
+  _feeWalletCache.set(normRef, fallbackWallet);
+  return fallbackWallet;
 }
 
 export async function getFeeWalletIfExists(userRefId: string): Promise<FeeWallet | null> {
-  _feeWalletCache.set(userRefId, OFFICIAL_PRIMARY_FEE_WALLET);
-  return OFFICIAL_PRIMARY_FEE_WALLET;
+  const normRef = (userRefId || 'anonymous_user').toLowerCase().trim();
+
+  if (_feeWalletCache.has(normRef)) {
+    return _feeWalletCache.get(normRef)!;
+  }
+
+  try {
+    const client = getCircleClient();
+    const walletSetId = await getOrCreatePlatformWalletSet();
+    const existing = await findWalletByRefId(client, walletSetId, `fee_${normRef}`);
+    if (existing) {
+      _feeWalletCache.set(normRef, existing);
+      return existing;
+    }
+  } catch (err: any) {
+    console.warn(`[FeeWallet] Circle API lookup failed for fee user ${normRef}:`, err?.message ?? err);
+  }
+
+  const fallbackWallet = deriveUserWallet(normRef, true);
+  _feeWalletCache.set(normRef, fallbackWallet);
+  return fallbackWallet;
 }
 
 /**
- * Withdraws USDC from a user's Developer-Controlled Trading Wallet to a destination address (user's Agent Wallet).
- * Uses Circle Developer-Controlled Wallets API with optional idempotencyKey protection.
+ * Withdraws USDC from a user's Developer-Controlled Trading Wallet to a destination address.
  */
 export async function withdrawFromTradingWallet(params: {
   userRefId: string;
   destinationAddress: string;
-  amount: string; // decimal string e.g. "1.50"
+  amount: string;
   idempotencyKey?: string;
 }): Promise<{ txHash?: string; challengeId?: string; id?: string }> {
   const tw = await getTradingWalletIfExists(params.userRefId);
@@ -192,10 +280,7 @@ export async function withdrawFromTradingWallet(params: {
     `to ${params.destinationAddress} (idempotencyKey: ${params.idempotencyKey ?? 'none'})...`
   );
 
-  // Circle SDK requires idempotencyKey to be a valid UUID format
   const key = params.idempotencyKey || randomUUID();
-
-  // Execute transfer call using Circle Developer-Controlled Wallets client
   const USDC_TOKEN_ID = process.env.CIRCLE_USDC_TOKEN_ID || 'ef87c8c3-85de-598a-af50-c5135eecfa74';
 
   try {
@@ -226,12 +311,11 @@ export async function withdrawFromTradingWallet(params: {
 
 /**
  * Withdraws USDC from a user's Developer-Controlled Fee Wallet to a destination address.
- * Uses Circle Developer-Controlled Wallets API with createTransaction (tokenId, destinationAddress, amount).
  */
 export async function withdrawFromFeeWallet(params: {
   userRefId: string;
   destinationAddress: string;
-  amount: string; // decimal string e.g. "1.50"
+  amount: string;
   idempotencyKey?: string;
 }): Promise<{ txHash?: string; challengeId?: string; id?: string }> {
   const fw = await getFeeWalletIfExists(params.userRefId);
@@ -246,7 +330,6 @@ export async function withdrawFromFeeWallet(params: {
     `to ${params.destinationAddress} (idempotencyKey: ${params.idempotencyKey ?? 'none'})...`
   );
 
-  // Circle SDK requires idempotencyKey to be a valid UUID format
   const key = params.idempotencyKey || randomUUID();
   const USDC_TOKEN_ID = process.env.CIRCLE_USDC_TOKEN_ID || 'ef87c8c3-85de-598a-af50-c5135eecfa74';
 
