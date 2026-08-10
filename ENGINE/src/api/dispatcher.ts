@@ -1556,9 +1556,9 @@ const server = http.createServer(async (req, res) => {
   if (parsedUrl.pathname === '/agents/gateway-withdraw') {
     if (req.method === 'GET') {
       try {
-        const action      = parsedUrl.query.action as string;
-        const userAddress = parsedUrl.query.userAddress as string;
-        const amountUsdc  = parsedUrl.query.amountUsdc as string;
+        const action      = parsedUrl.searchParams.get('action');
+        const userAddress = parsedUrl.searchParams.get('userAddress');
+        const amountUsdc  = parsedUrl.searchParams.get('amountUsdc');
 
         if (action !== 'estimate') {
           res.writeHead(400); res.end(JSON.stringify({ error: 'Unknown action' })); return;
