@@ -2148,6 +2148,71 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── Trading Wallet Fund endpoint ──────────────────────────────────────────────
+  // POST /agents/trading-wallet/fund — transfers USDC from Fee Wallet to Trading Wallet server-side.
+  if (req.method === 'POST' && parsedUrl.pathname === '/agents/trading-wallet/fund') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        let verifiedAddress: string;
+        let verifiedUserId: string;
+        try {
+          const authResult = await verifyRequestAuth(req.headers as Record<string, string | string[] | undefined>);
+          verifiedAddress = authResult.walletAddress;
+          verifiedUserId = authResult.userId;
+        } catch (authErr: any) {
+          res.writeHead(401);
+          res.end(JSON.stringify({ success: false, error: `Unauthorized: ${authErr.message}` }));
+          return;
+        }
+
+        const { amountUsdc, amount } = JSON.parse(body) as { amountUsdc?: string; amount?: string };
+        const fundAmount = amountUsdc || amount || '0';
+        if (!fundAmount || parseFloat(fundAmount) <= 0) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ success: false, error: 'Valid amount is required' }));
+          return;
+        }
+
+        const userRefId = verifiedUserId || verifiedAddress;
+        const feeWallet = await getOrAssignFeeWallet(userRefId);
+        const tradingWallet = await getOrAssignTradingWallet(userRefId);
+
+        const amountAtomic = BigInt(Math.round(parseFloat(fundAmount) * 1_000_000));
+        const USDC_ADDR = (process.env.USDC_ADDRESS ?? '0x3600000000000000000000000000000000000000') as Address;
+        
+        const { encodeFunctionData } = await import('viem');
+        const transferCalldata = encodeFunctionData({
+          abi: parseAbi(['function transfer(address to, uint256 amount) returns (bool)']),
+          functionName: 'transfer',
+          args: [tradingWallet.address as Address, amountAtomic],
+        });
+
+        let signer = ethersWallet;
+        if ((feeWallet as any).privateKey) {
+          signer = new ethers.Wallet((feeWallet as any).privateKey, ethersProvider);
+        }
+
+        console.log(`[trading-wallet/fund] Transferring ${fundAmount} USDC from Fee Wallet ${feeWallet.address} to Trading Wallet ${tradingWallet.address}...`);
+        const txResponse = await signer.sendTransaction({
+          to: USDC_ADDR,
+          data: transferCalldata,
+        });
+        const receipt = await txResponse.wait();
+        const txHash = receipt?.hash || txResponse.hash;
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, txHash, feeWalletAddress: feeWallet.address, tradingWalletAddress: tradingWallet.address }));
+      } catch (err: any) {
+        console.error('[/agents/trading-wallet/fund] Error:', err);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message || 'Internal server error' }));
+      }
+    });
+    return;
+  }
+
   // ── Trading Wallet Withdraw endpoint ─────────────────────────────────────────
   // POST /agents/trading-wallet/withdraw — withdraws USDC from Trading Wallet to user's Agent Wallet.
   // Security: Requires Circle Authorization header (verifiedAddress).

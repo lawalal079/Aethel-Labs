@@ -51,24 +51,27 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { amount, destinationAddress, idempotencyKey } = body ?? {};
+    const { action, amount, amountUsdc, destinationAddress, idempotencyKey } = body ?? {};
 
-    if (!amount || parseFloat(amount) <= 0) {
+    const reqAmount = amount || amountUsdc;
+    if (!reqAmount || parseFloat(reqAmount) <= 0) {
       return NextResponse.json({ error: 'Valid deposit/withdrawal amount is required.' }, { status: 400 });
     }
+
+    const endpoint = action === 'fund' ? '/agents/trading-wallet/fund' : '/agents/trading-wallet/withdraw';
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20000);
 
     let engineRes: Response;
     try {
-      engineRes = await fetch(`${ENGINE_URL}/agents/trading-wallet/withdraw`, {
+      engineRes = await fetch(`${ENGINE_URL}${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': authHeader,
         },
-        body: JSON.stringify({ amount, destinationAddress, idempotencyKey }),
+        body: JSON.stringify({ amount: reqAmount, amountUsdc: reqAmount, destinationAddress, idempotencyKey }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);

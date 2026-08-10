@@ -237,37 +237,24 @@ export default function Billing() {
 
 
     setIsTwProcessing(true);
-    const amountAtomic = parseUnits(parsedAmount.toFixed(6), 6);
     try {
-      setTwStatusMessage(`Encoding USDC transfer to ${walletLabel}...`);
-      const transferCallData = encodeFunctionData({
-        abi: ERC20_ABI,
-        functionName: 'transfer',
-        args: [getAddress(targetAddr), amountAtomic],
-      });
-
-      const res = await fetch('/api/endpoints', {
+      setTwStatusMessage(`Submitting transfer to ${walletLabel}...`);
+      const res = await fetch('/api/agents/trading-wallet', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${userToken}`,
+        },
         body: JSON.stringify({
-          action: 'sendContractTransaction',
-          userToken,
-          walletId,
-          contractAddress: USDC_ADDRESS,
-          callData: transferCallData,
+          action: 'fund',
+          amount: parsedAmount.toFixed(6),
         }),
       });
 
       const resData = await res.json();
-      if (!res.ok || !resData.challengeId) {
-        throw new Error(resData.error ?? resData.message ?? 'Transfer transaction failed.');
+      if (!res.ok || !resData.success) {
+        throw new Error(resData.error ?? 'Funding failed.');
       }
-
-      setTwStatusMessage('Please confirm the transfer in your wallet modal...');
-      if (circle.executeChallenge) {
-        await circle.executeChallenge(resData.challengeId);
-      }
-      await pollChallengeFast(userToken, resData.id ?? resData.challengeId);
 
       setTwStatusMessage(`Refreshing ${walletLabel} balance...`);
       await refreshTradingWallet();
