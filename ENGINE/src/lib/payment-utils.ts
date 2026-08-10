@@ -545,69 +545,68 @@ export async function deductDaemonTaskFee(
     nonce,
   };
 
-  // Hard guard — only Fee Wallet (Developer-Controlled, entity-secret) can sign server-side.
-  // The Trading Wallet is user principal and must not leak into fee payments.
-  // The User-Controlled login wallet key share never leaves the browser.
-  if (!feeWalletId) {
-    receipt.error = '[TaskFee] feeWalletId not provided — daemon was started before Option Y deploy. Re-deploy via the marketplace UI to provision a Fee Wallet. Skipping settlement.';
-    console.warn(receipt.error);
-    return receipt;
-  }
-
   try {
-    const client = getCircleClient();
+    const { getOrAssignFeeWallet } = await import('./trading-wallet');
+    const feeWallet = await getOrAssignFeeWallet(agentWalletAddress);
+    const feeWalletAddress: Address = feeWallet.address as Address;
+    const resolvedFeeWalletId = feeWalletId || feeWallet.id;
 
-    // Resolve the fee wallet's on-chain address from Circle.
-    // batchSigner.address sets message.from in the EIP-3009 payload — it MUST be the fee wallet's
-    // address so that ecrecover(signature) == message.from on the Gateway verify/settle call.
-    const feeWalletRes = await (client as any).getWallet({ id: feeWalletId });
-    const feeWalletAddress: Address = feeWalletRes.data?.wallet?.address as Address;
-    if (!feeWalletAddress) {
-      throw new Error(`[TaskFee] Could not resolve on-chain address for fee wallet ${feeWalletId}`);
-    }
+    console.log(`[TaskFee] Signing $${feeDisplay} USDC via Fee Wallet ${feeWalletAddress} → Gateway (${GATEWAY_ADDRESS})...`);
 
-    console.log(`[TaskFee] Signing $${feeDisplay} USDC via Fee Wallet ${feeWalletAddress} (walletId=${feeWalletId}) → Gateway (${GATEWAY_ADDRESS})...`);
-
-    // 2. Create BatchEvmSigner that signs EIP-712 typed data via Circle REST API (server-side, entity secret)
+    // 2. Create BatchEvmSigner that signs EIP-712 typed data via Circle REST API or local privateKey
     const batchSigner = {
       address: feeWalletAddress,
       signTypedData: async (params: any): Promise<Hex> => {
-        const types = {
-          EIP712Domain: [
-            { name: 'name', type: 'string' },
-            { name: 'version', type: 'string' },
-            { name: 'chainId', type: 'uint256' },
-            { name: 'verifyingContract', type: 'address' },
-          ],
-          ...params.types,
-        };
+        // Option A: Try Circle REST API if feeWalletId is a valid Circle UUID
+        if (feeWalletId && !feeWalletId.startsWith('user-fee-')) {
+          try {
+            const client = getCircleClient();
+            const types = {
+              EIP712Domain: [
+                { name: 'name', type: 'string' },
+                { name: 'version', type: 'string' },
+                { name: 'chainId', type: 'uint256' },
+                { name: 'verifyingContract', type: 'address' },
+              ],
+              ...params.types,
+            };
 
-        const typedDataJson = JSON.stringify(
-          {
-            types,
+            const typedDataJson = JSON.stringify(
+              {
+                types,
+                domain: params.domain,
+                primaryType: params.primaryType,
+                message: params.message,
+              },
+              (key, val) => (typeof val === 'bigint' ? val.toString() : val)
+            );
+
+            const signRes: any = await client.signTypedData({
+              walletId: feeWalletId,
+              data: typedDataJson,
+            });
+
+            const sig = signRes.data?.signature;
+            if (sig) return (sig.startsWith('0x') ? sig : `0x${sig}`) as Hex;
+          } catch (circleSignErr: any) {
+            console.warn('[TaskFee] Circle API signTypedData warning, falling back to local signer:', circleSignErr.message);
+          }
+        }
+
+        // Option B: Local EIP-712 signature using feeWallet.privateKey
+        if (feeWallet.privateKey) {
+          const { privateKeyToAccount } = await import('viem/accounts');
+          const account = privateKeyToAccount(feeWallet.privateKey);
+          const sig = await account.signTypedData({
             domain: params.domain,
+            types: params.types,
             primaryType: params.primaryType,
             message: params.message,
-          },
-          (key, val) => (typeof val === 'bigint' ? val.toString() : val)
-        );
-
-        let signRes: any;
-        try {
-          signRes = await client.signTypedData({
-            walletId: feeWalletId,
-            data: typedDataJson,
           });
-        } catch (signErr: any) {
-          console.error('[TaskFee][SIGN_ERR] code:', signErr.code, '| status:', signErr.status, '| message:', signErr.message);
-          throw signErr;
+          return sig as Hex;
         }
 
-        const sig = signRes.data?.signature;
-        if (!sig) {
-          throw new Error(`Circle signTypedData returned empty signature for fee wallet ${feeWalletId}`);
-        }
-        return (sig.startsWith('0x') ? sig : `0x${sig}`) as Hex;
+        throw new Error(`[TaskFee] No valid signature mechanism for Fee Wallet ${feeWalletAddress}`);
       },
     };
 
