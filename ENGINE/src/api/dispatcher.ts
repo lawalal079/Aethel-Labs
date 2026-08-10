@@ -21,6 +21,7 @@ import { checkSpendPolicy, recordSpend } from '../lib/spend-limit-policy';
 import { recordTransaction, getUserTransactions, getAllTransactions } from '../lib/transaction-store';
 import { saveRating, getAgentRatingStats, getAllRatings } from '../lib/rating-store';
 import { type Hash, type Address, parseAbi } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { ethers } from 'ethers';
 import { agentRegistry, AgentConfiguration, userSessions } from '../agents';
 import { getChatHistory, saveChatMessage } from '../agents/utils';
@@ -42,6 +43,38 @@ const GATEWAY_WALLET_ADDRESS = arcConfig.gatewayWallet;
 const USDC_ADDRESS_ARC = arcConfig.usdc;
 
 const GATEWAY_FACILITATOR_URL = process.env.GATEWAY_FACILITATOR_URL || 'https://gateway-api-testnet.circle.com';
+
+const ARC_DOMAIN       = 26;
+const GATEWAY_WALLET   = '0x0077777d7EBA4688BDeF3E311b846F25870A19B9';
+const GATEWAY_MINTER   = '0x0022222ABE238Cc2C7Bb1f21003F0a260052475B';
+const USDC_ARC         = '0x3600000000000000000000000000000000000000';
+
+function padAddress(addr: string): `0x${string}` {
+  if (!addr) return '0x0000000000000000000000000000000000000000000000000000000000000000';
+  const stripped = addr.startsWith('0x') ? addr.slice(2) : addr;
+  return `0x${stripped.padStart(64, '0')}` as `0x${string}`;
+}
+
+function cleanTransferSpec(rawSpec: any, depositorAddr: string, recipientAddr?: string) {
+  const dep = padAddress(depositorAddr);
+  const rec = padAddress(recipientAddr || depositorAddr);
+  return {
+    version: Number(rawSpec.version ?? 1),
+    sourceDomain: Number(rawSpec.sourceDomain ?? ARC_DOMAIN),
+    destinationDomain: Number(rawSpec.destinationDomain ?? ARC_DOMAIN),
+    sourceContract: padAddress(rawSpec.sourceContract || GATEWAY_WALLET),
+    destinationContract: padAddress(rawSpec.destinationContract || GATEWAY_MINTER),
+    sourceToken: padAddress(rawSpec.sourceToken || USDC_ARC),
+    destinationToken: padAddress(rawSpec.destinationToken || USDC_ARC),
+    sourceDepositor: dep,
+    destinationRecipient: rec,
+    sourceSigner: dep,
+    destinationCaller: padAddress(rawSpec.destinationCaller || '0'),
+    value: rawSpec.value?.toString() || '0',
+    salt: padAddress(rawSpec.salt || crypto.randomBytes(32).toString('hex')),
+    hookData: (rawSpec.hookData || '0x') as `0x${string}`,
+  };
+}
 
 const _PRIVATE_KEY_RAW = process.env.PRIVATE_KEY;
 if (!_PRIVATE_KEY_RAW) {
@@ -1516,6 +1549,297 @@ const server = http.createServer(async (req, res) => {
       }
     });
     return;
+  }
+
+  // ── Gateway Withdraw endpoint ─────────────────────────────────────────────
+  // GET /agents/gateway-withdraw or POST /agents/gateway-withdraw
+  if (parsedUrl.pathname === '/agents/gateway-withdraw') {
+    if (req.method === 'GET') {
+      try {
+        const action      = parsedUrl.query.action as string;
+        const userAddress = parsedUrl.query.userAddress as string;
+        const amountUsdc  = parsedUrl.query.amountUsdc as string;
+
+        if (action !== 'estimate') {
+          res.writeHead(400); res.end(JSON.stringify({ error: 'Unknown action' })); return;
+        }
+        if (!userAddress || !amountUsdc) {
+          res.writeHead(400); res.end(JSON.stringify({ error: 'Missing userAddress or amountUsdc' })); return;
+        }
+
+        const parsed = parseFloat(amountUsdc);
+        if (isNaN(parsed) || parsed <= 0) {
+          res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid amountUsdc' })); return;
+        }
+
+        const amountBaseUnits = BigInt(Math.round(parsed * 1_000_000)).toString();
+
+        const spec = cleanTransferSpec({
+          version: 1,
+          sourceDomain: ARC_DOMAIN,
+          destinationDomain: ARC_DOMAIN,
+          sourceContract: GATEWAY_WALLET,
+          destinationContract: GATEWAY_MINTER,
+          sourceToken: USDC_ARC,
+          destinationToken: USDC_ARC,
+          sourceDepositor: userAddress,
+          destinationRecipient: userAddress,
+          sourceSigner: userAddress,
+          destinationCaller: '0',
+          value: amountBaseUnits,
+          salt: crypto.randomBytes(32).toString('hex'),
+          hookData: '0x',
+        }, userAddress);
+
+        const estimateRes = await fetch(`${GATEWAY_FACILITATOR_URL}/v1/estimate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([{ spec }]),
+        });
+
+        const estimateData = await estimateRes.json();
+        if (!estimateRes.ok) {
+          res.writeHead(estimateRes.status);
+          res.end(JSON.stringify({ error: estimateData?.message ?? 'Estimate failed', detail: estimateData }));
+          return;
+        }
+
+        const estimated = estimateData?.[0]?.burnIntent || estimateData.body?.[0]?.burnIntent;
+        if (!estimated) {
+          res.writeHead(500); res.end(JSON.stringify({ error: 'Estimate returned no burn intent' })); return;
+        }
+
+        const cleanedSpec = cleanTransferSpec(estimated.spec ?? spec, userAddress);
+        const estMaxFee = BigInt(estimated.maxFee || '0');
+        const maxFeeBuffered = estMaxFee > BigInt(25_000) ? estMaxFee : BigInt(25_000);
+
+        res.writeHead(200);
+        res.end(JSON.stringify({
+          burnIntentSpec: {
+            maxBlockHeight: estimated.maxBlockHeight.toString(),
+            maxFee: maxFeeBuffered.toString(),
+            spec: cleanedSpec,
+          },
+          eip712Domain: { name: 'GatewayWallet', version: '1' },
+          eip712Types: {
+            BurnIntent: [
+              { name: 'maxBlockHeight', type: 'uint256' },
+              { name: 'maxFee', type: 'uint256' },
+              { name: 'spec', type: 'TransferSpec' },
+            ],
+            TransferSpec: [
+              { name: 'version', type: 'uint32' },
+              { name: 'sourceDomain', type: 'uint32' },
+              { name: 'destinationDomain', type: 'uint32' },
+              { name: 'sourceContract', type: 'bytes32' },
+              { name: 'destinationContract', type: 'bytes32' },
+              { name: 'sourceToken', type: 'bytes32' },
+              { name: 'destinationToken', type: 'bytes32' },
+              { name: 'sourceDepositor', type: 'bytes32' },
+              { name: 'destinationRecipient', type: 'bytes32' },
+              { name: 'sourceSigner', type: 'bytes32' },
+              { name: 'destinationCaller', type: 'bytes32' },
+              { name: 'value', type: 'uint256' },
+              { name: 'salt', type: 'bytes32' },
+              { name: 'hookData', type: 'bytes' },
+            ],
+          },
+          fees: estimateData.fees,
+        }));
+      } catch (err: any) {
+        res.writeHead(500); res.end(JSON.stringify({ error: err.message || 'Internal server error' }));
+      }
+      return;
+    }
+
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', async () => {
+        try {
+          const parsedBody = JSON.parse(body || '{}');
+          const { userAddress, amountUsdc } = parsedBody;
+          let { signature, burnIntentSpec } = parsedBody;
+
+          if (!userAddress || !amountUsdc) {
+            res.writeHead(400); res.end(JSON.stringify({ error: 'Missing userAddress or amountUsdc' })); return;
+          }
+
+          const parsed = parseFloat(amountUsdc);
+          if (isNaN(parsed) || parsed <= 0) {
+            res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid amountUsdc' })); return;
+          }
+
+          if (!signature || !burnIntentSpec) {
+            let feeWalletAddress = userAddress;
+            let feeWalletId: string | null = null;
+            try {
+              let fw: { address: string; id: string } | null = null;
+              try { fw = await getOrAssignFeeWallet(userAddress); } catch {}
+
+              if (!fw || (fw.address.toLowerCase() !== userAddress.toLowerCase() && (userAddress.toLowerCase().startsWith('0xa2d1') || userAddress.toLowerCase().startsWith('0x320f')))) {
+                const client = getCircleClient();
+                const walletsRes = await client.listWallets({});
+                const match = (walletsRes.data?.wallets || []).find(
+                  (w: any) => w.address?.toLowerCase() === userAddress.toLowerCase() || w.refId?.toLowerCase() === userAddress.toLowerCase()
+                );
+                if (match) fw = { address: match.address, id: match.id };
+              }
+
+              if (fw) {
+                feeWalletAddress = fw.address;
+                feeWalletId = fw.id;
+              }
+            } catch (fwErr: any) {
+              console.warn('[gateway-withdraw] Could not resolve Fee Wallet via Engine, using userAddress:', fwErr.message);
+            }
+
+            const amountBaseUnits = BigInt(Math.round(parsed * 1_000_000)).toString();
+
+            const spec = cleanTransferSpec({
+              version: 1,
+              sourceDomain: ARC_DOMAIN,
+              destinationDomain: ARC_DOMAIN,
+              sourceContract: GATEWAY_WALLET,
+              destinationContract: GATEWAY_MINTER,
+              sourceToken: USDC_ARC,
+              destinationToken: USDC_ARC,
+              sourceDepositor: feeWalletAddress,
+              destinationRecipient: userAddress,
+              sourceSigner: feeWalletAddress,
+              destinationCaller: '0',
+              value: amountBaseUnits,
+              salt: crypto.randomBytes(32).toString('hex'),
+              hookData: '0x',
+            }, feeWalletAddress, userAddress);
+
+            const estimateRes = await fetch(`${GATEWAY_FACILITATOR_URL}/v1/estimate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify([{ spec }]),
+            });
+
+            const estimateData = await estimateRes.json();
+            if (!estimateRes.ok) {
+              res.writeHead(estimateRes.status);
+              res.end(JSON.stringify({ error: estimateData?.message ?? 'Estimate failed', detail: estimateData }));
+              return;
+            }
+
+            const estimated = estimateData?.[0]?.burnIntent || estimateData.body?.[0]?.burnIntent;
+            if (!estimated) {
+              res.writeHead(500); res.end(JSON.stringify({ error: 'Estimate returned no burn intent' })); return;
+            }
+
+            const formattedSpec = cleanTransferSpec(estimated.spec ?? spec, feeWalletAddress, userAddress);
+            const estMaxFee = BigInt(estimated.maxFee || '0');
+            const maxFeeBuffered = estMaxFee > BigInt(25_000) ? estMaxFee : BigInt(25_000);
+
+            const eip712Data = {
+              domain: { name: 'GatewayWallet', version: '1' },
+              types: {
+                EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }],
+                BurnIntent: [{ name: 'maxBlockHeight', type: 'uint256' }, { name: 'maxFee', type: 'uint256' }, { name: 'spec', type: 'TransferSpec' }],
+                TransferSpec: [
+                  { name: 'version', type: 'uint32' }, { name: 'sourceDomain', type: 'uint32' }, { name: 'destinationDomain', type: 'uint32' },
+                  { name: 'sourceContract', type: 'bytes32' }, { name: 'destinationContract', type: 'bytes32' },
+                  { name: 'sourceToken', type: 'bytes32' }, { name: 'destinationToken', type: 'bytes32' },
+                  { name: 'sourceDepositor', type: 'bytes32' }, { name: 'destinationRecipient', type: 'bytes32' },
+                  { name: 'sourceSigner', type: 'bytes32' }, { name: 'destinationCaller', type: 'bytes32' },
+                  { name: 'value', type: 'uint256' }, { name: 'salt', type: 'bytes32' }, { name: 'hookData', type: 'bytes' },
+                ],
+              },
+              primaryType: 'BurnIntent',
+              message: {
+                maxBlockHeight: estimated.maxBlockHeight.toString(),
+                maxFee: maxFeeBuffered.toString(),
+                spec: formattedSpec,
+              },
+            };
+
+            if (feeWalletId) {
+              const client = getCircleClient();
+              const signRes = await client.signTypedData({ walletId: feeWalletId, data: JSON.stringify(eip712Data) });
+              signature = (signRes.data as any)?.signature;
+            } else {
+              const pk = process.env.PRIVATE_KEY;
+              if (!pk) {
+                res.writeHead(500); res.end(JSON.stringify({ error: 'PRIVATE_KEY not configured for server signing' })); return;
+              }
+              const formattedPk = (pk.startsWith('0x') ? pk : `0x${pk}`) as `0x${string}`;
+              const account = privateKeyToAccount(formattedPk);
+              signature = await account.signTypedData({
+                domain: eip712Data.domain,
+                types: eip712Data.types as any,
+                primaryType: 'BurnIntent',
+                message: {
+                  maxBlockHeight: BigInt(estimated.maxBlockHeight),
+                  maxFee: maxFeeBuffered,
+                  spec: { ...formattedSpec, value: BigInt(formattedSpec.value) },
+                },
+              });
+            }
+
+            burnIntentSpec = {
+              maxBlockHeight: estimated.maxBlockHeight.toString(),
+              maxFee: maxFeeBuffered.toString(),
+              spec: formattedSpec,
+            };
+          }
+
+          const transferRes = await fetch(`${GATEWAY_FACILITATOR_URL}/v1/transfer?enableForwarder=true`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify([{ burnIntent: burnIntentSpec, signature }]),
+          });
+
+          const transferData = await transferRes.json();
+          if (!transferRes.ok) {
+            res.writeHead(transferRes.status);
+            res.end(JSON.stringify({ error: transferData?.message ?? 'Circle Gateway transfer failed', detail: transferData }));
+            return;
+          }
+
+          const transferId = transferData?.transferId;
+          let finalStatus = 'pending';
+          let pollDetail: any = null;
+
+          if (transferId) {
+            for (let attempt = 0; attempt < 5; attempt++) {
+              await new Promise((r) => setTimeout(r, 2000));
+              try {
+                const pollRes = await fetch(`${GATEWAY_FACILITATOR_URL}/v1/transfer/${transferId}`);
+                if (pollRes.ok) {
+                  pollDetail = await pollRes.json();
+                  finalStatus = pollDetail?.status || 'pending';
+                  if (finalStatus === 'completed' || finalStatus === 'failed') break;
+                }
+              } catch (pollErr) {
+                console.warn('[gateway-withdraw] Polling error:', pollErr);
+              }
+            }
+          }
+
+          if (finalStatus === 'failed') {
+            const failureReason = pollDetail?.forwardingDetails?.failureReason || 'ON_CHAIN_FAILURE';
+            res.writeHead(400);
+            res.end(JSON.stringify({
+              error: `Circle Gateway Forwarder relayer failed to execute on-chain (${failureReason}). Your funds were NOT deducted and remain safe in your Gateway balance.`,
+              status: 'failed',
+              transferId,
+              detail: pollDetail,
+            }));
+            return;
+          }
+
+          res.writeHead(200);
+          res.end(JSON.stringify({ ...transferData, status: finalStatus, pollDetail }));
+        } catch (err: any) {
+          res.writeHead(500); res.end(JSON.stringify({ error: err.message || 'Internal server error' }));
+        }
+      });
+      return;
+    }
   }
 
   // ── Agent Deploy endpoint ─────────────────────────────────────────────────
