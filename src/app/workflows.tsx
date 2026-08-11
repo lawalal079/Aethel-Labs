@@ -364,32 +364,31 @@ function AgentPortal({ agent }: { agent: Agent }) {
             });
 
             if (dec) {
-              const priceText = dec.price ? `$${Number(dec.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '';
+              const spotNum = Number(dec.price || 0);
+              const priceText = spotNum > 0 ? `$${spotNum.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '';
               const rawPat = dec.patternDetected || dec.pattern;
               const hasPattern = rawPat && rawPat !== 'None';
 
+              const pLow = dec.patternLow ? `$${Number(dec.patternLow).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
+              const pHigh = dec.patternHigh ? `$${Number(dec.patternHigh).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
+              const rangeStr = (pLow && pHigh) ? `${pLow} – ${pHigh}` : null;
+
               let patternLabel = 'None (Scanning 336 candles / 7d)';
               if (hasPattern) {
-                const rangeStr = (dec.patternLow && dec.patternHigh)
-                  ? ` ($${Number(dec.patternLow).toLocaleString()} - $${Number(dec.patternHigh).toLocaleString()})`
-                  : '';
-                patternLabel = `${rawPat}${rangeStr}`;
+                patternLabel = rangeStr ? `${rawPat} Zone: ${rangeStr}` : `${rawPat}`;
               }
 
               let signalLabel = dec.action || 'HOLD';
               if (dec.action === 'HOLD' && hasPattern) {
-                const zoneText = (dec.patternLow && dec.patternHigh)
-                  ? `$${Number(dec.patternLow).toLocaleString()} - $${Number(dec.patternHigh).toLocaleString()}`
-                  : rawPat;
-                signalLabel = `HOLD (Awaiting Retrace into ${zoneText} Zone)`;
+                signalLabel = `HOLD (Awaiting Price Retrace into ${rangeStr || rawPat})`;
               } else if (dec.action === 'SWAP') {
-                signalLabel = `SWAP (${dec.fromToken} → ${dec.toToken})`;
+                signalLabel = `SWAP EXECUTION (${dec.fromToken} → ${dec.toToken})`;
               }
 
               newLines.push({
                 id: `daemon-dec-${data.cycleCount}-${Date.now()}`,
                 type: 'result',
-                text: `[Market Analyst] ${dec.pricePairLabel || 'BTC/USD'} Spot: ${priceText} · Pattern: ${patternLabel} · Signal: ${signalLabel}`,
+                text: `[Market Analyst] ${dec.pricePairLabel || 'BTC/USD'} Spot: ${priceText} | Pattern: ${patternLabel} | Signal: ${signalLabel}`,
                 ts: nowTs(),
               });
 
