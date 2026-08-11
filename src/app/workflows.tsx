@@ -9,7 +9,7 @@ const CandlestickChart = dynamic(() => import('./components/LightweightCandlesti
 
 import {
   Cpu, TerminalWindow, PaperPlaneRight, CheckCircle, X,
-  ArrowRight, ShieldCheck, Gear, TrendUp, ChartLine,
+  ArrowRight, ArrowDown, ShieldCheck, Gear, TrendUp, ChartLine,
   FileText, Code, Translate, Image as ImageIcon, ClockCounterClockwise,
   CaretDown,
 } from '@phosphor-icons/react';
@@ -262,7 +262,24 @@ function AgentPortal({ agent }: { agent: Agent }) {
   });
   const [running, setRunning] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLInputElement>(null);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
+  const isUserScrolledUpRef = useRef(false);
+
+  const handleScroll = useCallback(() => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    const isBottom = scrollHeight - scrollTop - clientHeight < 60;
+    isUserScrolledUpRef.current = !isBottom;
+    setShowScrollBottomBtn(!isBottom);
+  }, []);
+
+  const scrollToBottom = useCallback((smooth = true) => {
+    bottomRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
+    isUserScrolledUpRef.current = false;
+    setShowScrollBottomBtn(false);
+  }, []);
 
   useEffect(() => {
     // SESSION AIR-GAP: never persist messages under the 'anonymous' key — that would
@@ -272,7 +289,12 @@ function AgentPortal({ agent }: { agent: Agent }) {
     localStorage.setItem(key, JSON.stringify(messages));
   }, [messages, activeUserIdentifier, activeAgentId]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => {
+    if (!isUserScrolledUpRef.current) {
+      scrollToBottom(true);
+    }
+  }, [messages, scrollToBottom]);
+
   useEffect(() => { inputRef.current?.focus(); }, []);
 
   // ─── History fetch hook: fires when agent or user identity changes ──────────
@@ -393,21 +415,12 @@ function AgentPortal({ agent }: { agent: Agent }) {
               });
 
             if (dec && dec.reasoning) {
-              const isErrorNotice =
-                dec.reasoning.includes('Gemini API') ||
-                dec.reasoning.includes('rate limit') ||
-                dec.reasoning.includes('paused') ||
-                dec.reasoning.includes('error') ||
-                dec.reasoning.includes('HTTP 429');
-
-              if (!isErrorNotice) {
-                newLines.push({
-                  id: `daemon-reason-${data.cycleCount}-${Date.now()}`,
-                  type: 'system',
-                  text: `[Gemini 2.5 Flash Reasoning] "${dec.reasoning}"`,
-                  ts: nowTs(),
-                });
-              }
+              newLines.push({
+                id: `daemon-reason-${data.cycleCount}-${Date.now()}`,
+                type: 'system',
+                text: `[Gemini 2.5 Flash Reasoning] "${dec.reasoning}"`,
+                ts: nowTs(),
+              });
             }
             }
 
@@ -804,7 +817,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
   };
 
   return (
-    <div className="flex flex-col h-full rounded-xl border border-[#2A2F35] bg-[#0B0B0C] overflow-hidden">
+    <div className="relative flex flex-col h-full rounded-xl border border-[#2A2F35] bg-[#0B0B0C] overflow-hidden">
       {/* Console top bar */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#2A2F35] bg-[#0f1214] shrink-0">
         <div className="flex items-center gap-2">
@@ -824,7 +837,11 @@ function AgentPortal({ agent }: { agent: Agent }) {
       </div>
 
       {/* Log output */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4 scrollbar-none min-h-[300px] max-h-[500px]">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto px-4 py-3 space-y-4 scrollbar-none min-h-[300px] max-h-[500px]"
+      >
         {messages.map(line => {
           if (line.type === 'user') {
             return (
@@ -1372,6 +1389,18 @@ function AgentPortal({ agent }: { agent: Agent }) {
         })}
         <div ref={bottomRef} />
       </div>
+
+      {/* Floating Jump-to-Bottom Arrow Button */}
+      {showScrollBottomBtn && (
+        <button
+          type="button"
+          onClick={() => scrollToBottom(true)}
+          className="absolute bottom-14 right-6 flex items-center gap-1.5 px-3 py-1.5 bg-[#4E8981] hover:bg-[#3b6d67] text-white text-[11px] font-mono font-bold rounded-full shadow-xl border border-teal-300/40 transition-all transform hover:scale-105 active:scale-95 z-30 cursor-pointer animate-bounce"
+        >
+          <ArrowDown size={14} className="stroke-[2.5]" />
+          <span>Scroll to Latest</span>
+        </button>
+      )}
 
       {/* Autonomous Status Bar */}
       <div className="flex items-center justify-between px-4 py-2.5 border-t border-[#2A2F35] bg-[#0f1214] shrink-0 text-[11px] font-mono">
