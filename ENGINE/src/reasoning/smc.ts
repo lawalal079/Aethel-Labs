@@ -1,14 +1,14 @@
 /**
  * smc.ts — Smart Money Concepts (SMC) Reasoning Engine
  *
- * Implements SMC strategy evaluation powered by Gemini 2.5 Flash:
+ * Implements SMC strategy evaluation powered by Gemini Flash:
  * - OrderBlocks (OB)
  * - Fair Value Gaps (FVG)
  * - Liquidity Sweeps (LS)
  * - Risk-to-Reward TP (1:2) & Structural SL
  */
 
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { formatCandlesForPrompt, type OHLCCandle } from '../lib/ohlc-feed';
 
 // ── Strategy Configuration Types ──────────────────────────────────────────────
@@ -123,7 +123,7 @@ TRADING RULES (each candle above has real O/H/L/C wick data — analyze it mathe
    - You MUST populate patternLow and patternHigh with the exact numeric price boundaries of that zone (e.g. patternLow: 63800, patternHigh: 64150)!
    - In reasoning, explain the exact price range and current distance (e.g. "FVG gap at $63,800–$64,150; spot $63,485 is below. Holding until price retraces to $63,800 to buy.").
 
-CRITICAL: Do NOT output "Fewer than 3 candles available". You have ${candleCount} real candles. Evaluate the price action precisely.
+CRITICAL: Evaluate the price action precisely and return the JSON response format below.
 
 RESPONSE FORMAT — return ONLY this JSON, no markdown:
 {"action": "SWAP" or "HOLD", "fromToken": "USDC"/"EURC"/"cirBTC", "toToken": "USDC"/"EURC"/"cirBTC", "amountIn": "<number string>", "patternDetected": "OrderBlock"/"FairValueGap"/"LiquiditySweep"/"TakeProfit"/"StopLoss"/"None", "patternLow": <number or null>, "patternHigh": <number or null>, "reasoning": "<exact price analysis and trigger condition, max 120 chars>"}`;
@@ -205,21 +205,20 @@ export async function evaluateSMCStrategy(ctx: SMCContext): Promise<SMCDecision>
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
-
-    const promptText = buildSMCPrompt(ctx);
-    console.log(`[SMC] Sending ${ctx.candles.length} candles to Gemini 2.5 Flash for SMC strategy evaluation...`);
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: promptText,
-      config: {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-1.5-flash',
+      generationConfig: {
         responseMimeType: 'application/json',
         temperature: 0.1,
       },
     });
 
-    const responseText = response.text?.trim() ?? '';
+    const promptText = buildSMCPrompt(ctx);
+    console.log(`[SMC] Sending ${ctx.candles.length} candles to Gemini Flash for SMC strategy evaluation...`);
+
+    const response = await model.generateContent(promptText);
+    const responseText = response.response.text()?.trim() ?? '';
     console.log(`[SMC] Gemini Flash Raw Response: ${responseText}`);
 
     const parsed = JSON.parse(responseText);

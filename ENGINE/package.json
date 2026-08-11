@@ -17,6 +17,7 @@
     "@circle-fin/app-kit": "^1.4.2",
     "@circle-fin/developer-controlled-wallets": "^10.3.1",
     "@circle-fin/x402-batching": "^3.2.0",
+    "@google/generative-ai": "^0.21.0",
     "@types/node": "^20.14.0",
     "@x402/core": "^2.16.0",
     "@x402/evm": "^2.16.0",

@@ -22,8 +22,8 @@ import { estimateSwap, executeSwap } from '../lib/appkit-swap';
 import { checkSpendPolicy, recordSpend } from '../lib/spend-limit-policy';
 import { publicClient, USDC_ADDRESS, deductDaemonTaskFee } from '../lib/payment-utils';
 import { getPosition, savePosition, clearPosition } from '../lib/position-store';
-import { type SupportedToken, type OHLCCandle } from '../reasoning/smc';
-import { syntheticCandle } from '../lib/ohlc-feed';
+import { type SupportedToken } from '../reasoning/smc';
+import { syntheticCandle, type OHLCCandle } from '../lib/ohlc-feed';
 import {
   getLatestSharedDecision,
   runMarketAnalystCycle,
