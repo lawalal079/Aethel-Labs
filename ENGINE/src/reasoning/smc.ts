@@ -1,15 +1,68 @@
 /**
  * smc.ts — Smart Money Concepts (SMC) Reasoning Engine
  *
- * Implements SMC strategy evaluation powered by Gemini Flash:
+ * Implements SMC strategy evaluation powered by Gemini 2.5 Flash:
  * - OrderBlocks (OB)
  * - Fair Value Gaps (FVG)
  * - Liquidity Sweeps (LS)
  * - Risk-to-Reward TP (1:2) & Structural SL
+ *
+ * Features:
+ * - Round-robin API key rotation for multi-key deployments
+ * - Decision lock-in: SWAP decisions are cached and re-served when API is exhausted
  */
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import { formatCandlesForPrompt, type OHLCCandle } from '../lib/ohlc-feed';
+
+// ── API Key Rotation ──────────────────────────────────────────────────────────
+
+let _keyIndex = 0;
+
+function getNextApiKey(): string | null {
+  const raw = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
+  if (!raw) return null;
+  // Support comma-separated keys: KEY1,KEY2,KEY3
+  const keys = raw.split(',').map(k => k.trim()).filter(Boolean);
+  if (keys.length === 0) return null;
+  const key = keys[_keyIndex % keys.length];
+  _keyIndex++;
+  return key;
+}
+
+// ── Decision Lock-In Cache ────────────────────────────────────────────────────
+// When Gemini returns a SWAP decision, cache it here. If a subsequent API call
+// fails (rate limit, 404, network error), the locked-in decision is re-served
+// so the trade still executes. Cleared after the trade is executed or after 15 min.
+
+let _lockedDecision: SMCDecision | null = null;
+let _lockedAt = 0;
+const LOCK_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+function lockDecision(d: SMCDecision): void {
+  if (d.action === 'SWAP') {
+    _lockedDecision = d;
+    _lockedAt = Date.now();
+    console.log(`[SMC] 🔒 SWAP decision LOCKED: ${d.fromToken} → ${d.toToken} | Pattern=${d.patternDetected}`);
+  }
+}
+
+function getLockedDecision(): SMCDecision | null {
+  if (!_lockedDecision) return null;
+  if (Date.now() - _lockedAt > LOCK_TTL_MS) {
+    console.log('[SMC] 🔓 Locked SWAP decision expired (15 min TTL). Clearing.');
+    _lockedDecision = null;
+    return null;
+  }
+  return _lockedDecision;
+}
+
+export function clearLockedDecision(): void {
+  if (_lockedDecision) {
+    console.log('[SMC] 🔓 Locked SWAP decision cleared (trade executed).');
+    _lockedDecision = null;
+  }
+}
 
 // ── Strategy Configuration Types ──────────────────────────────────────────────
 
@@ -190,10 +243,15 @@ function validateDecision(raw: unknown): SMCDecision {
 // ── Gemini Evaluation Entry Point ─────────────────────────────────────────────
 
 export async function evaluateSMCStrategy(ctx: SMCContext): Promise<SMCDecision> {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+  const apiKey = getNextApiKey();
 
   if (!apiKey) {
-    console.warn('[SMC] GEMINI_API_KEY missing — using deterministic fallback decision.');
+    console.warn('[SMC] GEMINI_API_KEY missing — checking locked decision...');
+    const locked = getLockedDecision();
+    if (locked) {
+      console.log('[SMC] ♻️ Re-serving locked SWAP decision (no API key available).');
+      return locked;
+    }
     return {
       action: 'HOLD',
       fromToken: 'USDC',
@@ -205,29 +263,42 @@ export async function evaluateSMCStrategy(ctx: SMCContext): Promise<SMCDecision>
   }
 
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
-      generationConfig: {
+    const ai = new GoogleGenAI({ apiKey });
+
+    const promptText = buildSMCPrompt(ctx);
+    console.log(`[SMC] Sending ${ctx.candles.length} candles to Gemini 2.5 Flash (key #${_keyIndex}) for SMC evaluation...`);
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: promptText,
+      config: {
         responseMimeType: 'application/json',
         temperature: 0.1,
       },
     });
 
-    const promptText = buildSMCPrompt(ctx);
-    console.log(`[SMC] Sending ${ctx.candles.length} candles to Gemini Flash for SMC strategy evaluation...`);
-
-    const response = await model.generateContent(promptText);
-    const responseText = response.response.text()?.trim() ?? '';
-    console.log(`[SMC] Gemini Flash Raw Response: ${responseText}`);
+    const responseText = response.text?.trim() ?? '';
+    console.log(`[SMC] Gemini 2.5 Flash Raw Response: ${responseText}`);
 
     const parsed = JSON.parse(responseText);
     const validated = validateDecision(parsed);
     console.log(`[SMC] Validated SMC Decision: Action=${validated.action} | Pattern=${validated.patternDetected} | Reasoning="${validated.reasoning}"`);
+
+    // Lock-in SWAP decisions so they persist through API failures
+    lockDecision(validated);
+
     return validated;
 
   } catch (err: any) {
     console.error('[SMC] Gemini evaluation error:', err.message || err);
+
+    // If API fails but we have a locked SWAP decision, re-serve it
+    const locked = getLockedDecision();
+    if (locked) {
+      console.log('[SMC] ♻️ API failed but re-serving locked SWAP decision.');
+      return locked;
+    }
+
     return {
       action: 'HOLD',
       fromToken: 'USDC',

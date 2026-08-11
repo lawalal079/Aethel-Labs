@@ -4,6 +4,11 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Æthel Labs | Marketplace",
   description: "Enterprise-grade autonomous AI Agent Marketplace secured by USDC.",
+  icons: {
+    icon: "/favicon.png",
+    shortcut: "/icon.png",
+    apple: "/aethel-logo.png",
+  },
 };
 
 export default function RootLayout({

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { createPublicClient, http, parseAbi, decodeFunctionData, getAddress, type Address } from 'viem';
 import { User, Agent, ExecutionLog } from '../types';
 import { CircleWalletProvider, useCircleWallet } from './components/providers/CircleWalletProvider';
@@ -503,6 +503,60 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
       unwatchListings();
     };
   }, [walletAddress, feeWalletAddress, agents]);
+
+  // ── Nanopayment Cycle Tracking (feeds Transaction Ledger & Consumption Rate) ─
+  const lastTrackedCycleRef = useRef<number>(0);
+  useEffect(() => {
+    if (!walletAddress) return;
+    const engineUrl = process.env.NEXT_PUBLIC_ENGINE_URL || 'http://localhost:4000';
+
+    const pollNanopaymentCycles = async () => {
+      try {
+        const res = await fetch(`${engineUrl}/agents/status?userAddress=${encodeURIComponent(walletAddress)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const cycleCount = data?.cycleCount ?? 0;
+
+        if (cycleCount > lastTrackedCycleRef.current && lastTrackedCycleRef.current > 0) {
+          // Inject one nanopayment log for each new cycle since last poll
+          const newCycles = cycleCount - lastTrackedCycleRef.current;
+          const agentName = data?.agentId?.includes('smc') ? 'SMC Alpha Executor' : (data?.agentId || 'Autonomous Agent');
+          const now = new Date();
+          const tsStr = now
+            .toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+            .replace(',', ' ·');
+
+          const newLogs: ExecutionLog[] = [];
+          for (let i = 0; i < newCycles; i++) {
+            newLogs.push({
+              id: `nano_${cycleCount - i}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+              agent_id: data?.agentId || 'agent_smc_alpha_executor',
+              agent_name: agentName,
+              timestamp: tsStr,
+              status: 'SUCCESS',
+              tx_type: 'Nanopayment',
+              cost_usdc: 0.0001,
+            });
+          }
+
+          setExecutionLogs(prev => {
+            // De-duplicate: only add logs we haven't seen yet
+            const existingIds = new Set(prev.map(l => l.id));
+            const fresh = newLogs.filter(l => !existingIds.has(l.id));
+            return [...fresh, ...prev];
+          });
+        }
+
+        lastTrackedCycleRef.current = cycleCount;
+      } catch {
+        // Silent — non-critical
+      }
+    };
+
+    pollNanopaymentCycles();
+    const timer = setInterval(pollNanopaymentCycles, 10_000); // Every 10s
+    return () => clearInterval(timer);
+  }, [walletAddress]);
 
 
   const [selectedAgentForDeploy, setSelectedAgentForDeploy] = useState<Agent | null>(null);

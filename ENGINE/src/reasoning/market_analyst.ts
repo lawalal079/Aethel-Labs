@@ -176,7 +176,7 @@ export async function runMarketAnalystCycle(agentId: string = 'smc_alpha_executo
  */
 export function getLatestSharedDecision(
   agentId: string = 'smc_alpha_executor',
-  maxAgeMs: number = 120_000
+  maxAgeMs: number = 720_000
 ): SharedDecision | null {
   const canonicalId = agentId.includes('smc') ? 'smc_alpha_executor' : agentId;
   const stored = _sharedDecisionStore.get(canonicalId);
@@ -200,7 +200,7 @@ export function getLatestSharedDecision(
  */
 export function ensureMarketAnalystRunning(
   agentId: string = 'smc_alpha_executor',
-  intervalSeconds: number = 60
+  intervalSeconds: number = 300
 ): void {
   const canonicalId = agentId.includes('smc') ? 'smc_alpha_executor' : agentId;
   if (_analystIntervals.has(canonicalId)) {
