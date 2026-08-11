@@ -115,9 +115,9 @@ export async function runMarketAnalystCycle(agentId: string = 'smc_alpha_executo
   const [eurUsd, btcUsd] = await Promise.all([fetchEURUSDPrice(), fetchBTCUSDPrice()]);
   const validBtcUsd = btcUsd ?? 64000;
 
-  // 2. Fetch real 48-hour OHLC candles (96 30-min bars) from CryptoCompare
+  // 2. Fetch real 7-day OHLC candles (336 30-min bars) from CryptoCompare
   _totalAnalystCoinGeckoCalls++;
-  const btcCandles = (await fetchBTCCandles(2)) ?? [syntheticCandle(validBtcUsd)];
+  const btcCandles = (await fetchBTCCandles(7)) ?? [syntheticCandle(validBtcUsd)];
 
   // 3. Build neutral SMCContext for Gemini evaluation
   const smcCtx: SMCContext = {

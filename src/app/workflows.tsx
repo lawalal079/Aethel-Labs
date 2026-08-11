@@ -368,7 +368,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
               const rawPat = dec.patternDetected || dec.pattern;
               const hasPattern = rawPat && rawPat !== 'None';
 
-              let patternLabel = 'None (Scanning 96 candles / 48h)';
+              let patternLabel = 'None (Scanning 336 candles / 7d)';
               if (hasPattern) {
                 const rangeStr = (dec.patternLow && dec.patternHigh)
                   ? ` ($${Number(dec.patternLow).toLocaleString()} - $${Number(dec.patternHigh).toLocaleString()})`
