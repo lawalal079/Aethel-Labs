@@ -364,11 +364,32 @@ function AgentPortal({ agent }: { agent: Agent }) {
             });
 
             if (dec) {
-              const priceText = dec.price ? `$${Number(dec.price).toLocaleString()}` : '';
+              const priceText = dec.price ? `$${Number(dec.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '';
+              const rawPat = dec.patternDetected || dec.pattern;
+              const hasPattern = rawPat && rawPat !== 'None';
+
+              let patternLabel = 'None (Scanning 48 candles)';
+              if (hasPattern) {
+                const rangeStr = (dec.patternLow && dec.patternHigh)
+                  ? ` ($${Number(dec.patternLow).toLocaleString()} - $${Number(dec.patternHigh).toLocaleString()})`
+                  : '';
+                patternLabel = `${rawPat}${rangeStr}`;
+              }
+
+              let signalLabel = dec.action || 'HOLD';
+              if (dec.action === 'HOLD' && hasPattern) {
+                const zoneText = (dec.patternLow && dec.patternHigh)
+                  ? `$${Number(dec.patternLow).toLocaleString()} - $${Number(dec.patternHigh).toLocaleString()}`
+                  : rawPat;
+                signalLabel = `HOLD (Awaiting Retrace into ${zoneText} Zone)`;
+              } else if (dec.action === 'SWAP') {
+                signalLabel = `SWAP (${dec.fromToken} → ${dec.toToken})`;
+              }
+
               newLines.push({
                 id: `daemon-dec-${data.cycleCount}-${Date.now()}`,
                 type: 'result',
-                text: `[Market Analyst] ${dec.pricePairLabel || 'BTC/USD'} Spot: ${priceText} · Pattern Detected: ${dec.pattern || 'Fair Value Gap'} · Signal: ${dec.action || 'HOLD'}`,
+                text: `[Market Analyst] ${dec.pricePairLabel || 'BTC/USD'} Spot: ${priceText} · Pattern: ${patternLabel} · Signal: ${signalLabel}`,
                 ts: nowTs(),
               });
 
