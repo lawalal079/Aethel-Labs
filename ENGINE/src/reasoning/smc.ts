@@ -20,14 +20,28 @@ import { formatCandlesForPrompt, type OHLCCandle } from '../lib/ohlc-feed';
 let _keyIndex = 0;
 
 function getNextApiKey(): string | null {
-  const raw = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
-  if (!raw) return null;
-  // Support comma-separated keys: KEY1,KEY2,KEY3
-  const keys = raw.split(',').map(k => k.trim()).filter(Boolean);
+  const keys: string[] = [];
+
+  // Support GEMINI_API_KEY, GEMINI_API_KEY2, GEMINI_API_KEY3... or comma-separated lists
+  Object.keys(process.env).forEach(envKey => {
+    if (/^GEMINI_API_KEY/i.test(envKey) || /^NEXT_PUBLIC_GEMINI_API_KEY/i.test(envKey)) {
+      const val = process.env[envKey];
+      if (val) {
+        val.split(',').forEach(k => {
+          const trimmed = k.trim();
+          if (trimmed && !keys.includes(trimmed)) {
+            keys.push(trimmed);
+          }
+        });
+      }
+    }
+  });
+
   if (keys.length === 0) return null;
-  const key = keys[_keyIndex % keys.length];
+
+  const selected = keys[_keyIndex % keys.length];
   _keyIndex++;
-  return key;
+  return selected;
 }
 
 // ── Decision Lock-In Cache ────────────────────────────────────────────────────
