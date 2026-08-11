@@ -20,7 +20,12 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const authHeader = req.headers.get('Authorization') ?? req.headers.get('authorization');
+    const body = await req.json();
+    let authHeader = req.headers.get('Authorization') ?? req.headers.get('authorization');
+    if (!authHeader && body?.userAddress) {
+      authHeader = `Bearer ${body.userAddress}`;
+    }
+
     if (!authHeader) {
       return NextResponse.json(
         { success: false, error: 'Missing Authorization header. Provide your Circle session token as Bearer.' },
@@ -28,7 +33,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const body = await req.json();
     const res = await fetch(`${ENGINE_URL}/agents/rate`, {
       method: 'POST',
       headers: {

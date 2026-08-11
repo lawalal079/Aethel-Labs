@@ -234,12 +234,18 @@ export default function Marketplace() {
     setRatingMsg(null);
 
     try {
+      const userToken = circle.loginResult?.userToken;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (userToken) {
+        headers['Authorization'] = `Bearer ${userToken}`;
+      }
+
       const res = await fetch('/api/agents/rate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           agentId: ratingModalAgent.id,
-          userAddress: circle.feeWalletAddress,
+          userAddress: circle.feeWalletAddress || activeAddress,
           rating: selectedStars,
           comment: commentText,
         }),

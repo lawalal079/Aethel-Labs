@@ -1,8 +1,9 @@
 /**
  * ohlc-feed.ts — Real OHLC Candle Data Feed for SMC Pattern Detection
  *
- * Source 1: Binance public API (/api/v3/klines) — Primary (No rate limits)
- * Source 2: CoinGecko public API (/coins/{id}/ohlc) — Fallback
+ * Source 1: CryptoCompare public API (/data/v2/histominute) — Primary (0 geoblocks, 100% US & cloud accessible)
+ * Source 2: Binance public API (/api/v3/klines) — Fallback
+ * Source 3: CoinGecko public API (/coins/{id}/ohlc) — Fallback
  *
  * Returns true OHLC bars with real wicks and price action.
  */
@@ -18,14 +19,45 @@ export interface OHLCCandle {
 // ── BTC/USD OHLC ──────────────────────────────────────────────────────────────
 
 /**
- * Fetches real 30-min OHLC candles for BTC/USD from Binance with CoinGecko fallback.
+ * Fetches real 30-min OHLC candles for BTC/USD from CryptoCompare with Binance/CoinGecko fallback.
  *
  * @param days  1 = last ~24h (48 bars), 2 = last ~48h (96 bars). Default: 1.
  */
 export async function fetchBTCCandles(days: 1 | 2 | 7 = 1): Promise<OHLCCandle[] | null> {
   const limit = days === 1 ? 48 : days === 2 ? 96 : 336;
 
-  // 1. Primary: Binance public API (100% reliable, zero rate limits)
+  // 1. Primary: CryptoCompare Public OHLC API (0 rate limits, 0 geoblocks on cloud servers)
+  try {
+    const url = `https://min-api.cryptocompare.com/data/v2/histominute?fsym=BTC&tsym=USD&limit=${limit}&aggregate=30`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(8_000),
+    });
+
+    if (res.ok) {
+      const data: any = await res.json();
+      const raw = data?.Data?.Data;
+      if (Array.isArray(raw) && raw.length > 0) {
+        const candles: OHLCCandle[] = raw.map((item: any) => ({
+          time: Number(item.time) * 1000,
+          open: parseFloat(item.open),
+          high: parseFloat(item.high),
+          low: parseFloat(item.low),
+          close: parseFloat(item.close),
+        }));
+
+        candles.sort((a, b) => a.time - b.time);
+        console.log(
+          `[OHLCFeed] ✓ CryptoCompare BTC/USD: ${candles.length} OHLC candles (30m) — latest close: $${candles.at(-1)?.close}`
+        );
+        return candles;
+      }
+    }
+  } catch (err) {
+    console.warn('[OHLCFeed] CryptoCompare OHLC failed:', (err as Error).message);
+  }
+
+  // 2. Fallback: Binance public API
   try {
     const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=30m&limit=${limit}`;
     const res = await fetch(url, {
@@ -53,33 +85,6 @@ export async function fetchBTCCandles(days: 1 | 2 | 7 = 1): Promise<OHLCCandle[]
     }
   } catch (err) {
     console.warn('[OHLCFeed] Binance klines failed:', (err as Error).message);
-  }
-
-  // 2. Fallback: CoinGecko public API
-  try {
-    const url = `https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=${days}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-
-    if (res.ok) {
-      const raw = (await res.json()) as [number, number, number, number, number][];
-      if (Array.isArray(raw) && raw.length > 0) {
-        const candles: OHLCCandle[] = raw.map(([time, open, high, low, close]) => ({
-          time,
-          open,
-          high,
-          low,
-          close,
-        }));
-
-        candles.sort((a, b) => a.time - b.time);
-        console.log(
-          `[OHLCFeed] ✓ CoinGecko BTC/USD: ${candles.length} OHLC candles (${days}d) — latest close: $${candles.at(-1)?.close}`
-        );
-        return candles;
-      }
-    }
-  } catch (err) {
-    console.warn('[OHLCFeed] CoinGecko OHLC fetch failed:', (err as Error).message);
   }
 
   return null;
