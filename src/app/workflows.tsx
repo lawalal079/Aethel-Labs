@@ -418,7 +418,13 @@ function AgentPortal({ agent }: { agent: Agent }) {
               newLines.push({
                 id: `daemon-reason-${data.cycleCount}-${Date.now()}`,
                 type: 'system',
-                text: `[Gemini 2.5 Flash Reasoning] "${dec.reasoning}"`,
+                text: `[Gemini 2.0 Flash Reasoning] "${dec.reasoning}"`,
+                ts: nowTs(),
+              });
+              newLines.push({
+                id: `daemon-chart-${data.cycleCount}-${Date.now()}`,
+                type: 'system',
+                text: `[Market Data Verification] Live Spot Chart: https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT`,
                 ts: nowTs(),
               });
             }
@@ -1382,7 +1388,27 @@ function AgentPortal({ agent }: { agent: Agent }) {
           return (
             <div key={line.id} className="flex justify-start w-full">
               <div className="max-w-[90%] rounded-xl px-4 py-2.5 bg-[#16191C]/90 border border-[#4E8981]/30 text-[#4E8981] font-mono text-[11px] shadow-sm backdrop-blur-sm">
-                <div className="break-words whitespace-pre-wrap leading-relaxed">{line.text}</div>
+                <div className="break-words whitespace-pre-wrap leading-relaxed">
+                  {line.text.includes('https://') ? (
+                    line.text.split(/(https:\/\/[^\s]+)/g).map((part, idx) =>
+                      part.startsWith('https://') ? (
+                        <a
+                          key={idx}
+                          href={part}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[#4E8981] underline hover:text-teal-300 font-bold inline-flex items-center gap-1 bg-[#4E8981]/10 px-2 py-0.5 rounded border border-[#4E8981]/30 transition-colors ml-1"
+                        >
+                          {part.includes('tradingview.com') ? '📊 Open Live BTC/USD TradingView Chart ↗' : part}
+                        </a>
+                      ) : (
+                        <span key={idx}>{part}</span>
+                      )
+                    )
+                  ) : (
+                    line.text
+                  )}
+                </div>
               </div>
             </div>
           );

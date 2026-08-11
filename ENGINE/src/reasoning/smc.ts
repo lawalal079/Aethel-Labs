@@ -280,19 +280,33 @@ export async function evaluateSMCStrategy(ctx: SMCContext): Promise<SMCDecision>
     const ai = new GoogleGenAI({ apiKey });
 
     const promptText = buildSMCPrompt(ctx);
-    console.log(`[SMC] Sending ${ctx.candles.length} candles to Gemini 2.5 Flash (key #${_keyIndex}) for SMC evaluation...`);
+    console.log(`[SMC] Sending ${ctx.candles.length} candles to Gemini Flash (key #${_keyIndex}) for SMC evaluation...`);
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: promptText,
-      config: {
-        responseMimeType: 'application/json',
-        temperature: 0.1,
-      },
-    });
+    let responseText = '';
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: promptText,
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.1,
+        },
+      });
+      responseText = response.text?.trim() ?? '';
+    } catch (modelErr: any) {
+      console.warn(`[SMC] gemini-2.0-flash failed (${modelErr?.message || modelErr}), trying gemini-1.5-flash fallback...`);
+      const response = await ai.models.generateContent({
+        model: 'gemini-1.5-flash',
+        contents: promptText,
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.1,
+        },
+      });
+      responseText = response.text?.trim() ?? '';
+    }
 
-    const responseText = response.text?.trim() ?? '';
-    console.log(`[SMC] Gemini 2.5 Flash Raw Response: ${responseText}`);
+    console.log(`[SMC] Gemini Flash Raw Response: ${responseText}`);
 
     const parsed = JSON.parse(responseText);
     const validated = validateDecision(parsed);
@@ -304,7 +318,8 @@ export async function evaluateSMCStrategy(ctx: SMCContext): Promise<SMCDecision>
     return validated;
 
   } catch (err: any) {
-    console.error('[SMC] Gemini evaluation error:', err.message || err);
+    const rawMsg = String(err?.message || err);
+    console.error('[SMC] Gemini evaluation error:', rawMsg);
 
     // If API fails but we have a locked SWAP decision, re-serve it
     const locked = getLockedDecision();
@@ -313,13 +328,20 @@ export async function evaluateSMCStrategy(ctx: SMCContext): Promise<SMCDecision>
       return locked;
     }
 
+    let cleanReasoning = `Gemini API fallback — holding position safely.`;
+    if (rawMsg.includes('429') || rawMsg.includes('RESOURCE_EXHAUSTED')) {
+      cleanReasoning = `Gemini API daily/min quota limit reached (429) — holding position safely until reset.`;
+    } else if (rawMsg.includes('404') || rawMsg.includes('NOT_FOUND')) {
+      cleanReasoning = `Gemini model endpoint updating — holding position safely.`;
+    }
+
     return {
       action: 'HOLD',
       fromToken: 'USDC',
       toToken: 'USDC',
       amountIn: '0.00',
       patternDetected: 'None',
-      reasoning: `Gemini API fallback (${err.message || 'eval error'}) — holding position safely.`,
+      reasoning: cleanReasoning,
     };
   }
 }

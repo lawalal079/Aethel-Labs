@@ -298,7 +298,7 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<void> {
 
   // ── 4. Shared Decision-Engine Architecture (Market Analyst) ───────────────
   // Ensure the shared Market Analyst process is active for 'smc_alpha_executor'
-  const intervalSec = options.intervalSeconds || 60;
+  const intervalSec = options.intervalSeconds || 300;
   ensureMarketAnalystRunning('smc_alpha_executor', intervalSec);
 
   // Fetch the latest shared decision (must not be older than 2x the analyst interval)
@@ -490,7 +490,7 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<void> {
 async function main() {
   const args = process.argv.slice(2);
   const once = args.includes('--once');
-  let intervalSeconds = 60;
+  let intervalSeconds = 300;
   let userRefId = 'user_demo_0x1';
 
   for (const arg of args) {

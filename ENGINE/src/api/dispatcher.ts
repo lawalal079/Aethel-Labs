@@ -1977,7 +1977,7 @@ const server = http.createServer(async (req, res) => {
 
         // 5. Start (or no-op if already running) the daemon loop
         console.log(`[deploy-step-5] Starting daemon loop...`);
-        const interval = (intervalSeconds && intervalSeconds > 0) ? intervalSeconds : 60;
+        const interval = (intervalSeconds && intervalSeconds > 0) ? intervalSeconds : 300;
         const { entry: daemonEntry, alreadyExisted } = startDaemon(
           verifiedAddress,
           userRefId,

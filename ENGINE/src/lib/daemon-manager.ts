@@ -111,7 +111,7 @@ export function startDaemon(
   userAddress: string,
   userRefId: string,
   tradingWalletAddress: string,
-  intervalSeconds = 60,
+  intervalSeconds = 300,
   agentId = 'agent_smc_alpha_executor',
   feeWalletId?: string,
 ): StartDaemonResult {
