@@ -13,7 +13,7 @@ export default function Home() {
   return (
     <Web3Provider>
       <AppProvider>
-        <div className="h-screen w-full bg-[#0B0B0C] text-[#e5e2e1] overflow-hidden p-3 md:p-4 font-sans flex gap-3 md:gap-4 max-w-[1700px] mx-auto min-w-0">
+        <div className="h-screen w-screen bg-[#0B0B0C] text-[#e5e2e1] overflow-hidden p-4 font-sans flex gap-4">
           {/* Vertical Sidebar Component */}
           <Sidebar />
 

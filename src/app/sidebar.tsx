@@ -105,7 +105,7 @@ export default function Sidebar() {
   ];
 
   return (
-    <aside className="w-[80px] md:w-[88px] h-fit self-center bg-[#1A1D20] border border-[#2A2F35] rounded-2xl flex flex-col items-center py-4 gap-1.5 shrink-0 select-none shadow-2xl relative z-20 overflow-hidden">
+    <aside className="w-[96px] h-fit self-center bg-[#1A1D20] border border-[#2A2F35] rounded-2xl flex flex-col items-center py-6 gap-2 shrink-0 select-none shadow-2xl relative z-20 overflow-hidden">
       {/* Navigation Links */}
       <nav className="flex flex-col gap-1 w-full items-center px-2">
         {navigationItems.map((item) => {
