@@ -846,7 +846,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-3 space-y-4 scrollbar-none min-h-[300px] max-h-[500px]"
+        className="flex-1 overflow-y-auto px-4 py-3 pb-14 space-y-4 scrollbar-none min-h-[300px] max-h-[500px]"
       >
         {messages.map(line => {
           if (line.type === 'user') {
@@ -1421,10 +1421,10 @@ function AgentPortal({ agent }: { agent: Agent }) {
         <button
           type="button"
           onClick={() => scrollToBottom(true)}
-          className="absolute bottom-14 right-6 flex items-center gap-1.5 px-3 py-1.5 bg-[#4E8981] hover:bg-[#3b6d67] text-white text-[11px] font-mono font-bold rounded-full shadow-xl border border-teal-300/40 transition-all transform hover:scale-105 active:scale-95 z-30 cursor-pointer animate-bounce"
+          className="absolute bottom-12 right-6 flex items-center gap-2 px-3.5 py-2 bg-gradient-to-r from-[#4E8981] to-[#3b6d67] hover:from-[#3b6d67] hover:to-[#2e5954] text-white text-[11px] font-mono font-bold rounded-full shadow-2xl border border-teal-300/40 transition-all transform hover:scale-105 active:scale-95 z-30 cursor-pointer whitespace-nowrap shrink-0"
         >
           <ArrowDown size={14} className="stroke-[2.5]" />
-          <span>Scroll to Latest</span>
+          <span>Jump to Latest</span>
         </button>
       )}
 
@@ -1530,7 +1530,7 @@ export default function Workflows() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-6 items-start">
+      <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] lg:grid-cols-[260px_1fr] gap-6 items-start w-full min-w-0">
 
         {/* ── Left: Deployed agent selector ─────────────────────────────────── */}
         <div className="bg-[#1A1D20] border border-[#2A2F35] rounded-xl overflow-hidden">
