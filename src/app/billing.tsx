@@ -105,8 +105,13 @@ export default function Billing() {
 
     const filtered = (executionLogs ?? []).filter(log => {
       if (range === 'all_time') return true;
-      const logTime = new Date(log.timestamp).getTime();
-      return (now - logTime) <= rangeMs;
+      try {
+        const logTime = new Date(log.timestamp).getTime();
+        if (isNaN(logTime)) return false;
+        return (now - logTime) <= rangeMs;
+      } catch {
+        return false;
+      }
     });
 
     const headers = ['Timestamp', 'Transaction Type', 'Agent Name', 'Amount USDC', 'Status', 'Tx Hash'];
@@ -583,11 +588,17 @@ export default function Billing() {
 
   (executionLogs ?? []).forEach(log => {
     if (log.tx_type === 'Nanopayment' || (log.cost_usdc && log.cost_usdc > 0)) {
-      const logDate = new Date(log.timestamp).toISOString().split('T')[0];
-      if (logDate === todayStr) {
-        todaySpend += Math.abs(log.cost_usdc);
-      } else if (logDate === yesterdayStr) {
-        yesterdaySpend += Math.abs(log.cost_usdc);
+      try {
+        const parsed = new Date(log.timestamp);
+        if (isNaN(parsed.getTime())) return;
+        const logDate = parsed.toISOString().split('T')[0];
+        if (logDate === todayStr) {
+          todaySpend += Math.abs(log.cost_usdc);
+        } else if (logDate === yesterdayStr) {
+          yesterdaySpend += Math.abs(log.cost_usdc);
+        }
+      } catch {
+        // Skip entries with unparseable timestamps
       }
     }
   });
@@ -1375,7 +1386,7 @@ export default function Billing() {
                       {log.tx_type ?? '—'}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-xs text-[#8a8f98]">{log.timestamp}</td>
+                  <td className="px-6 py-4 text-xs text-[#8a8f98]">{(() => { try { return new Date(log.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return log.timestamp; } })()}</td>
                   <td className="px-6 py-4">
                     <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
                       log.status === 'SUCCESS'

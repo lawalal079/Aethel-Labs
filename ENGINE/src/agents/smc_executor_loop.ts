@@ -245,9 +245,31 @@ interface LoopOptions {
   intervalSeconds: number;
 }
 
+/** Result of a single daemon cycle — surfaced to frontend via DaemonStatus.lastCycleResult */
+export interface CycleResult {
+  /** Whether a swap was attempted */
+  swapAttempted: boolean;
+  /** Whether the swap succeeded (only meaningful if swapAttempted=true) */
+  swapSucceeded: boolean;
+  /** Swap direction, e.g. 'USDC → cirBTC' */
+  swapDirection?: string;
+  /** Amount sent in the swap */
+  amountIn?: string;
+  /** Amount received from the swap */
+  amountOut?: string;
+  /** On-chain transaction hash */
+  txHash?: string;
+  /** Error message if the swap failed */
+  error?: string;
+  /** Policy rejection reason if applicable */
+  policyRejection?: string;
+  /** Timestamp of this result (epoch ms) */
+  timestamp: number;
+}
+
 // ── Core Cycle ────────────────────────────────────────────────────────────────
 
-export async function runSMCExecutorCycle(options: LoopOptions): Promise<void> {
+export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleResult> {
   cycleCount++;
   const { userRefId } = options;
 
@@ -284,7 +306,7 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<void> {
   const usdcBalanceNum = Number(rawUSDC) / 1e6;
   if (usdcBalanceNum < 0.001) {
     console.log(`[Daemon] Insufficient funds for ${userRefId} (${balances.USDC} USDC). Skipping cycle.`);
-    return;
+    return { swapAttempted: false, swapSucceeded: false, error: `Insufficient funds: ${balances.USDC} USDC`, timestamp: Date.now() };
   }
 
   console.log(`[SMC] Balances — USDC: ${balances.USDC} | EURC: ${balances.EURC} | cirBTC: ${balances.cirBTC}`);
@@ -313,7 +335,7 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<void> {
 
   if (!decision) {
     console.warn(`[SMC] Market Analyst decision unavailable for user ${userRefId} — skipping execution.`);
-    return;
+    return { swapAttempted: false, swapSucceeded: false, error: 'Market Analyst decision unavailable', timestamp: Date.now() };
   }
 
   const ageSec = Math.round((Date.now() - decision.timestamp) / 1000);
@@ -487,6 +509,19 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<void> {
     txHash: txHash ?? null,
     executionError: executionError ?? null,
   });
+
+  // ── 10. Return execution result for daemon-manager to surface to frontend ──
+  return {
+    swapAttempted: decision.action === 'SWAP' && policyAllowed,
+    swapSucceeded: executed,
+    swapDirection: decision.action === 'SWAP' ? `${decision.fromToken} → ${decision.toToken}` : undefined,
+    amountIn: decision.action === 'SWAP' ? decision.amountIn : undefined,
+    amountOut: amountOut ?? undefined,
+    txHash: txHash ?? undefined,
+    error: executionError ?? ((!policyAllowed && decision.action === 'SWAP') ? undefined : undefined),
+    policyRejection: (!policyAllowed && decision.action === 'SWAP') ? policyReason : undefined,
+    timestamp: Date.now(),
+  };
 }
 
 // ── CLI Driver ────────────────────────────────────────────────────────────────

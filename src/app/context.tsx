@@ -733,7 +733,7 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
           id: t.id,
           agent_id: t.agentId || 'system',
           agent_name: (t.agentName || 'Agent Task').replace(/_/g, ' '),
-          timestamp: t.timestamp ? new Date(t.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleString(),
+          timestamp: t.timestamp || new Date().toISOString(),
           status: t.status || 'SUCCESS',
           tx_type: t.txType || 'Nanopayment',
           cost_usdc: t.amountUsdc || 0,

@@ -12,7 +12,7 @@
  *     See AETHEL_LABS_ROADMAP.md, Decisions Log, 2026-07-25.
  */
 
-import { runSMCExecutorCycle } from '../agents/smc_executor_loop';
+import { runSMCExecutorCycle, type CycleResult } from '../agents/smc_executor_loop';
 import { ensureMarketAnalystRunning } from '../reasoning/market_analyst';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -40,6 +40,8 @@ export interface DaemonEntry {
   lastCycleAt: number | null;
   /** Agent ID being run by this daemon loop */
   agentId: string;
+  /** Last execution result from the most recent cycle — surfaced to frontend */
+  lastCycleResult: CycleResult | null;
   /** NodeJS interval handle — used to clear the loop on stop */
   _intervalHandle: NodeJS.Timeout;
 }
@@ -56,6 +58,7 @@ export interface DaemonStatus {
   lastCycleAt: number | null;
   uptimeSeconds: number;
   agentId: string;
+  lastCycleResult: CycleResult | null;
 }
 
 export interface StartDaemonResult {
@@ -75,7 +78,7 @@ function _key(userAddress: string): string {
 
 async function _runCycle(entry: DaemonEntry): Promise<void> {
   try {
-    await runSMCExecutorCycle({
+    const result = await runSMCExecutorCycle({
       userRefId: entry.userRefId,
       feeWalletId: entry.feeWalletId,
       once: false,
@@ -83,11 +86,18 @@ async function _runCycle(entry: DaemonEntry): Promise<void> {
     });
     entry.cycleCount++;
     entry.lastCycleAt = Date.now();
+    entry.lastCycleResult = result;
   } catch (err) {
     console.error(
       `[DaemonManager] Cycle error for ${entry.userAddress}:`,
       err instanceof Error ? err.message : String(err),
     );
+    entry.lastCycleResult = {
+      swapAttempted: false,
+      swapSucceeded: false,
+      error: err instanceof Error ? err.message : String(err),
+      timestamp: Date.now(),
+    };
   }
 }
 
@@ -140,6 +150,7 @@ export function startDaemon(
     cycleCount: 0,
     lastCycleAt: null,
     agentId,
+    lastCycleResult: null,
     _intervalHandle: setInterval(() => void _runCycle(entry), intervalSeconds * 1000),
   };
 
@@ -201,6 +212,7 @@ export function getDaemonStatus(userAddress: string): DaemonStatus | null {
     lastCycleAt: entry.lastCycleAt,
     uptimeSeconds: Math.round((Date.now() - entry.startedAt) / 1000),
     agentId: entry.agentId || 'agent_smc_alpha_executor',
+    lastCycleResult: entry.lastCycleResult ?? null,
   };
 }
 
@@ -220,5 +232,6 @@ export function listDaemons(): DaemonStatus[] {
     lastCycleAt: entry.lastCycleAt,
     uptimeSeconds: Math.round((Date.now() - entry.startedAt) / 1000),
     agentId: entry.agentId || 'agent_smc_alpha_executor',
+    lastCycleResult: entry.lastCycleResult ?? null,
   }));
 }

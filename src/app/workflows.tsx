@@ -324,7 +324,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
         id: `hist-${msg.timestamp}-${Math.random().toString(36).slice(2)}`,
         type: (msg.role === 'user' ? 'user' : 'result') as ConsoleLine['type'],
         text: msg.content,
-        ts: new Date(msg.timestamp).toLocaleTimeString(),
+        ts: (() => { try { const d = new Date(msg.timestamp); return isNaN(d.getTime()) ? nowTs() : d.toLocaleTimeString(); } catch { return nowTs(); } })(),
         role: msg.role,
         content: msg.content,
       }));
@@ -444,6 +444,33 @@ function AgentPortal({ agent }: { agent: Agent }) {
                 ts: nowTs(),
               });
             }
+            }
+
+            // ── Swap Execution Result (from daemon-manager.lastCycleResult) ──
+            const cr = data.lastCycleResult;
+            if (cr && cr.swapAttempted) {
+              if (cr.swapSucceeded) {
+                newLines.push({
+                  id: `daemon-swap-ok-${data.cycleCount}-${Date.now()}`,
+                  type: 'result',
+                  text: `[Swap Result] ✓ ${cr.amountIn ?? '?'} ${cr.swapDirection ?? ''} | Out: ${cr.amountOut ?? '?'} | Tx: ${cr.txHash ?? 'pending'}`,
+                  ts: nowTs(),
+                });
+              } else {
+                newLines.push({
+                  id: `daemon-swap-fail-${data.cycleCount}-${Date.now()}`,
+                  type: 'system',
+                  text: `[Swap Result] ✗ ${cr.swapDirection ?? ''} FAILED: ${cr.error || cr.policyRejection || 'Unknown error'}`,
+                  ts: nowTs(),
+                });
+              }
+            } else if (cr && cr.policyRejection) {
+              newLines.push({
+                id: `daemon-policy-${data.cycleCount}-${Date.now()}`,
+                type: 'system',
+                text: `[Policy Gate] ✗ Swap blocked: ${cr.policyRejection}`,
+                ts: nowTs(),
+              });
             }
 
             if (pos && pos.amount > 0) {
