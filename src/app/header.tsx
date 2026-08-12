@@ -51,7 +51,7 @@ export default function Header() {
 
   return (
     <header className="bg-transparent w-full z-40">
-      <div className="flex justify-between items-center py-4 w-full">
+      <div className="flex justify-between items-center py-2.5 md:py-3 w-full">
 
         {/* ── Logo ─────────────────────────────────────────────────────── */}
         <div className="flex items-center gap-8">

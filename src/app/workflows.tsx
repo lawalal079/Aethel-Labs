@@ -858,7 +858,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-3 space-y-4 scrollbar-none min-h-[300px] max-h-[500px]"
+        className="flex-1 overflow-y-auto px-4 py-3 space-y-4 scrollbar-none min-h-[250px] max-h-[420px]"
       >
         {messages.map(line => {
           if (line.type === 'user') {
@@ -1523,16 +1523,16 @@ export default function Workflows() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Page header */}
       <div className="w-full overflow-visible">
-        <h1 className="text-[28px] font-bold text-white mb-1 tracking-tight font-sans">Agent Portal</h1>
-        <p className="text-[#8a8f98] text-sm">
+        <h1 className="text-2xl font-bold text-white mb-0.5 tracking-tight font-sans">Agent Portal</h1>
+        <p className="text-[#8a8f98] text-xs">
           Select a deployed agent and assign operational directives.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] lg:grid-cols-[260px_1fr] gap-6 items-start w-full min-w-0">
+      <div className="grid grid-cols-1 md:grid-cols-[210px_1fr] lg:grid-cols-[220px_1fr] gap-4 items-start w-full min-w-0">
 
         {/* ── Left: Deployed agent selector ─────────────────────────────────── */}
         <div className="bg-[#1A1D20] border border-[#2A2F35] rounded-xl overflow-hidden">
