@@ -317,6 +317,8 @@ export async function getAgentRegistryEntry(agentId: string) {
 /**
  * Verifies on-chain that `buyer` holds an active license for `agentId`.
  * Retries up to 3 times with 800ms backoff to absorb Arc Testnet RPC blips.
+ */
+
 const _licenseCache = new Map<string, { licensed: boolean; timestamp: number }>();
 const LICENSE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes cache
 
