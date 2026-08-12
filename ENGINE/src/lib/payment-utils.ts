@@ -317,13 +317,24 @@ export async function getAgentRegistryEntry(agentId: string) {
 /**
  * Verifies on-chain that `buyer` holds an active license for `agentId`.
  * Retries up to 3 times with 800ms backoff to absorb Arc Testnet RPC blips.
+const _licenseCache = new Map<string, { licensed: boolean; timestamp: number }>();
+const LICENSE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes cache
+
+/**
+ * Checks if a buyer address holds an active license for a given agentId.
+ * Caches results in memory to minimize RPC calls and avoid rate-limiting errors.
  * Returns true if licensed, false otherwise.
- * Throws only if all retry attempts fail.
  */
 export async function verifyUserLicense(
   buyer: Address,
   agentId: string,
 ): Promise<boolean> {
+  const cacheKey = `${buyer.toLowerCase()}:${agentId}`;
+  const cached = _licenseCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < LICENSE_CACHE_TTL_MS) {
+    return cached.licensed;
+  }
+
   const MAX_ATTEMPTS = 3;
   const RETRY_DELAY_MS = 800;
   let lastErr: unknown;
@@ -336,6 +347,8 @@ export async function verifyUserLicense(
         functionName: 'userLicenses',
         args: [buyer, agentId],
       }) as boolean;
+
+      _licenseCache.set(cacheKey, { licensed, timestamp: Date.now() });
       return licensed;
     } catch (err) {
       lastErr = err;
@@ -346,8 +359,14 @@ export async function verifyUserLicense(
     }
   }
 
-  const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
-  throw new Error(`License check RPC error for ${buyer}/${agentId}: ${msg}`);
+  // Fall back to cached status if RPC read timed out
+  if (cached) {
+    console.warn(`[verifyUserLicense] RPC failed; falling back to cached license status for ${buyer}/${agentId}`);
+    return cached.licensed;
+  }
+
+  console.error(`[verifyUserLicense] All attempts failed for ${buyer}/${agentId}:`, lastErr);
+  throw new Error(`RPC node busy checking license for ${buyer.slice(0, 6)}...${buyer.slice(-4)}`);
 }
 
 

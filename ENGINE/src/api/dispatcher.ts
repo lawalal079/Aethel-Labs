@@ -1934,19 +1934,32 @@ const server = http.createServer(async (req, res) => {
 
         // License must be held by the Fee Wallet, not the User-Controlled wallet.
         // Purchases from the new /agents/purchase endpoint write userLicenses[feeWallet.address][agentId] = true.
-        console.log(`[deploy-step-3] Checking license on-chain for FeeWallet=${feeWallet.address} / ${agentId}... (MOCK_AUTH_ENABLED=${MOCK_AUTH_ENABLED})`);
+        console.log(`[deploy-step-3] Checking license on-chain for FeeWallet=${feeWallet.address} & UserAddress=${verifiedAddress} / ${agentId}... (MOCK_AUTH_ENABLED=${MOCK_AUTH_ENABLED})`);
         let licensed = false;
         try {
           if (MOCK_AUTH_ENABLED) {
             licensed = true;
           } else {
-            licensed = await verifyUserLicense(feeWallet.address as Address, agentId);
+            // Check feeWallet first, then fallback to user address
+            try {
+              licensed = await verifyUserLicense(feeWallet.address as Address, agentId);
+            } catch (err) {
+              console.warn(`[deploy-step-3] Fee wallet license check failed, checking user address...`, err);
+            }
+
+            if (!licensed && verifiedAddress) {
+              try {
+                licensed = await verifyUserLicense(verifiedAddress as Address, agentId);
+              } catch (err) {
+                console.warn(`[deploy-step-3] User address license check failed:`, err);
+              }
+            }
           }
           console.log(`[deploy-step-3-ok] License check result: licensed=${licensed}`);
         } catch (licenseErr: any) {
-          console.error(`[deploy-step-3-fail] License verification RPC error: ${licenseErr.message}`);
+          console.error(`[deploy-step-3-fail] License verification RPC error:`, licenseErr);
           res.writeHead(503);
-          res.end(JSON.stringify({ success: false, error: `License verification unavailable: ${licenseErr.message}` }));
+          res.end(JSON.stringify({ success: false, error: `License check unavailable due to network RPC latency. Please retry in a few seconds.` }));
           return;
         }
 

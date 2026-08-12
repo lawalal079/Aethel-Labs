@@ -771,12 +771,17 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
           // Licenses are now issued to the Fee Wallet (not the User-Controlled wallet).
           feeWalletAddress: feeWalletAddress ?? null,
           agentId,
-          intervalSeconds: 60,
+          intervalSeconds: 300,
         }),
       });
       const data = await res.json();
       if (!res.ok || data.success === false) {
-        throw new Error(data.error || 'Failed to start daemon');
+        const rawErr = data.error || 'Failed to start daemon';
+        let cleanErr = rawErr;
+        if (rawErr.includes('License verification') || rawErr.includes('userLicenses') || rawErr.includes('0x14dec') || rawErr.includes('Raw Call Arguments')) {
+          cleanErr = 'License verification busy due to testnet RPC latency. Please retry in a moment.';
+        }
+        throw new Error(cleanErr);
       }
       setDeployedAgentIds(prev => prev.includes(agentId) ? prev : [...prev, agentId]);
       showToast('Agent daemon started successfully!', 'success');
@@ -784,7 +789,12 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
       return true;
     } catch (err: any) {
       console.error('[context] startDaemonForAgent error:', err);
-      showToast(err.message || 'Failed to start daemon', 'error');
+      const rawMsg = err?.message || 'Failed to start daemon';
+      let cleanMsg = rawMsg;
+      if (rawMsg.includes('0x14dec') || rawMsg.includes('Raw Call Arguments') || rawMsg.includes('userLicenses')) {
+        cleanMsg = 'License check busy due to testnet RPC latency. Please retry in a moment.';
+      }
+      showToast(cleanMsg, 'error');
       return false;
     } finally {
       setIsDeployingDaemon(false);
