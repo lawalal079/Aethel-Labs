@@ -842,10 +842,11 @@ function AgentPortal({ agent }: { agent: Agent }) {
             <button
               type="button"
               onClick={() => scrollToBottom(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-[#4E8981]/20 hover:bg-[#4E8981]/35 text-[#4E8981] border border-[#4E8981]/50 text-[10px] font-mono font-bold rounded-lg transition-all cursor-pointer animate-pulse active:scale-95"
+              className="flex items-center gap-1 px-2 py-0.5 bg-[#4E8981]/25 hover:bg-[#4E8981]/40 text-[#4E8981] border border-[#4E8981]/50 text-[9px] font-mono font-bold rounded transition-all cursor-pointer animate-pulse active:scale-95 shrink-0"
+              title="Jump to Latest Logs"
             >
-              <ArrowDown size={12} className="stroke-[2.5]" />
-              <span>Jump to Latest</span>
+              <ArrowDown size={11} className="stroke-[3]" />
+              <span>Latest</span>
             </button>
           )}
           <span className="text-[9px] text-[#4E8981]/60 font-mono font-semibold border border-[#4E8981]/20 px-2 py-0.5 rounded">
@@ -858,7 +859,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-3 space-y-4 scrollbar-none min-h-[250px] max-h-[420px]"
+        className="flex-1 overflow-y-auto px-4 py-3 space-y-4 scrollbar-none min-h-[220px] max-h-[300px] xl:max-h-[360px]"
       >
         {messages.map(line => {
           if (line.type === 'user') {

@@ -28,7 +28,7 @@ export default function Home() {
             </main>
 
             {/* Sticky HUD Footer */}
-            <footer className="h-10 border-t border-[#2A2F35]/50 flex items-center justify-between px-2 text-[11px] text-[#8a8f98] shrink-0 pt-2">
+            <footer className="h-8 border-t border-[#2A2F35]/50 flex items-center justify-between px-2 text-[11px] text-[#8a8f98] shrink-0">
               <span>© 2026 Æthel Labs. Secured by USDC splits.</span>
             </footer>
           </div>
