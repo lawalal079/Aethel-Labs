@@ -108,6 +108,7 @@ export interface SMCContext {
   currentPrice: number;
   pricePairLabel: string;
   candles: OHLCCandle[];
+  candles1H?: OHLCCandle[];
 }
 
 export interface SMCDecision {
@@ -119,12 +120,16 @@ export interface SMCDecision {
   reasoning: string;
   patternLow?: number;
   patternHigh?: number;
+  buyAt?: number;
+  tpAt?: number;
+  slAt?: number;
 }
 
 // ── Gemini Prompt Builder ─────────────────────────────────────────────────────
 
 function buildSMCPrompt(ctx: SMCContext): string {
-  const candleCount = ctx.candles.length;
+  const ltfCount = ctx.candles.length;
+  const htfCount = ctx.candles1H ? ctx.candles1H.length : 0;
 
   const hasCirBTC = Number(ctx.balances.cirBTC) > 0.00000001;
   const hasEURC   = Number(ctx.balances.EURC) > 0.01;
@@ -148,26 +153,31 @@ function buildSMCPrompt(ctx: SMCContext): string {
     positionBlock = `ACTIVE POSITION: Portfolio is in 100% USDC cash. Evaluate bullish SMC entry setups to SWAP from USDC into cirBTC or EURC.`;
   }
 
-  const candleBlock = candleCount > 0
-    ? `OHLC CANDLE DATA (30-min bars, oldest → newest, last ${Math.min(candleCount, 40)} shown):
+  const htfBlock = htfCount > 0
+    ? `HIGHER TIMEFRAME (1-HOUR BARS — MARKET STRUCTURE, ORDERBLOCKS & BREAKER BLOCKS):
+${formatCandlesForPrompt(ctx.candles1H!, 30)}`
+    : `HTF DATA: Not available`;
+
+  const ltfBlock = ltfCount > 0
+    ? `LOWER TIMEFRAME (15-MIN BARS — ENTRY TIMING & FVG / SWEEPS):
 ${formatCandlesForPrompt(ctx.candles, 40)}
 
 LATEST CLOSE: $${ctx.candles.at(-1)?.close ?? ctx.currentPrice}
 LIVE SPOT:    $${ctx.currentPrice}`
-    : `PRICE DATA: Live spot only — $${ctx.currentPrice}`;
+    : `LTF DATA: Live spot only — $${ctx.currentPrice}`;
 
-  return `You are SMC Alpha Executor — an autonomous DeFi trading agent using Smart Money Concepts (SMC) analysis.
+  return `You are SMC Alpha Executor — an autonomous DeFi trading agent performing Top-Down Smart Money Concepts (SMC) Analysis.
 
 CHAIN: Arc Testnet (Circle App Kit spot swaps)
 SUPPORTED TOKENS: USDC, EURC, cirBTC
-TOKEN MAP: cirBTC = Bitcoin on Arc Testnet. USDC → cirBTC = buying BTC. USDC → EURC = buying Euro.
 
 CURRENT MARKET STATE:
   - Price Pair:   ${ctx.pricePairLabel}
-  - Candle Count: ${candleCount} real 30-min OHLC bars available for multi-day market structure analysis
   - Live Spot:    $${ctx.currentPrice}
 
-${candleBlock}
+${htfBlock}
+
+${ltfBlock}
 
 WALLET BALANCES:
   - USDC:   ${ctx.balances.USDC}
@@ -176,36 +186,26 @@ WALLET BALANCES:
 
 ${positionBlock}
 
-TRADING RULES (each candle above has real O/H/L/C wick data — analyze it mathematically):
-1. ENTRY — BTC/USD pair (no open position):
-   - OrderBlock: cluster of low-close candles before a strong bullish impulse.
-     patternLow = LOW of the OrderBlock candle. patternHigh = HIGH of the OrderBlock candle.
-   - FairValueGap (FVG): candle[N].high < candle[N+2].low — a gap in the 3-candle impulse.
-     patternLow = candle[N].high (gap bottom). patternHigh = candle[N+2].low (gap top).
-   - LiquiditySweep: a wick LOW pierced below a prior multi-candle swing low, then closed above.
-     patternLow = the sweep wick low. patternHigh = the reversal candle's close.
-   - If live spot price is RETRACING into or INSIDE one of these bullish zones → SWAP: fromToken="USDC", toToken="cirBTC".
-
-2. ENTRY — EUR/USD pair (no open position):
-   - Same pattern rules. If bullish → SWAP: fromToken="USDC", toToken="EURC".
-
-3. TAKE PROFIT (open position):
-   - Price has reached or exceeded tpPrice (calculated via 1:2 Risk-to-Reward ratio above entry).
-   - SWAP held asset back to USDC. patternDetected="TakeProfit".
-
-4. STOP LOSS (open position):
-   - Price has dropped to or below slPrice (defined by structural patternLow / swing low of entry setup).
-   - SWAP held asset back to USDC. patternDetected="StopLoss".
-
-5. HOLD — No active entry zone being retested OR no clear setup at current price.
-   - You MUST identify any active OrderBlock, FairValueGap, or LiquiditySweep on the 336-candle chart!
-   - You MUST populate patternLow and patternHigh with the exact numeric price boundaries of that zone (e.g. patternLow: 63800, patternHigh: 64150)!
-   - In reasoning, explain the exact price range and current distance (e.g. "FVG gap at $63,800–$64,150; spot $63,485 is below. Holding until price retraces to $63,800 to buy.").
-
-CRITICAL: Evaluate the price action precisely and return the JSON response format below.
+TOP-DOWN TRADING METHODOLOGY:
+Perform full top-down SMC analysis across both timeframes:
+1. HTF STRUCTURE (1H): Identify overall market structure on 1H candles.
+   - OrderBlock: Cluster of down-close candles before a major bullish impulse.
+   - Breaker Block: An OrderBlock that got invalidated by a liquidity sweep, now flipped to support.
+   - Mark the HTF OrderBlock or Breaker Block zone (patternLow to patternHigh).
+2. LTF ENTRY (15M): Look for entry refinement inside or near the HTF zone.
+   - FairValueGap (FVG): Imbalance gap on 15m (candle[N].high < candle[N+2].low).
+   - LiquiditySweep: 15m wick low below previous swing low, followed by strong reversal.
+3. BUY SETUP (no open position):
+   - If live spot is retracing into or inside a bullish OrderBlock, Breaker Block, or FVG zone → action="SWAP", fromToken="USDC", toToken="cirBTC".
+   - You MUST specify: buyAt (trigger price), tpAt (1:2 R:R target price above entry), slAt (patternLow structural stop loss).
+4. HOLD SETUP:
+   - If price has not reached the buy zone, action="HOLD".
+   - You MUST identify the target pattern (OrderBlock, Breaker Block, FVG, or LiquiditySweep) and populate:
+     patternLow, patternHigh, buyAt (exact trigger entry price), tpAt (take profit), slAt (stop loss).
+   - In reasoning, state clearly: "OrderBlock at $63,600–$63,800; spot $63,679 is inside. Buying at $63,680, TP $63,800, SL $63,600."
 
 RESPONSE FORMAT — return ONLY this JSON, no markdown:
-{"action": "SWAP" or "HOLD", "fromToken": "USDC"/"EURC"/"cirBTC", "toToken": "USDC"/"EURC"/"cirBTC", "amountIn": "<number string>", "patternDetected": "OrderBlock"/"FairValueGap"/"LiquiditySweep"/"TakeProfit"/"StopLoss"/"None", "patternLow": <number or null>, "patternHigh": <number or null>, "reasoning": "<exact price analysis and trigger condition, max 120 chars>"}`;
+{"action": "SWAP" or "HOLD", "fromToken": "USDC"/"EURC"/"cirBTC", "toToken": "USDC"/"EURC"/"cirBTC", "amountIn": "<number string>", "patternDetected": "OrderBlock"/"BreakerBlock"/"FairValueGap"/"LiquiditySweep"/"TakeProfit"/"StopLoss"/"None", "patternLow": <number or null>, "patternHigh": <number or null>, "buyAt": <number or null>, "tpAt": <number or null>, "slAt": <number or null>, "reasoning": "<exact price analysis, trigger price, TP, and SL, max 140 chars>"}`;
 }
 
 function calculatePnl(entryPrice: number, currentPrice: number): string {
@@ -233,8 +233,9 @@ function validateDecision(raw: unknown): SMCDecision {
   let pattern: SMCPattern = 'None';
   const rawPattern = String(obj.patternDetected || obj.pattern || '').trim();
   if (/order\s*block/i.test(rawPattern)) pattern = 'OrderBlock';
+  else if (/breaker/i.test(rawPattern)) pattern = 'LiquiditySweep';
   else if (/fair\s*value\s*gap|fvg/i.test(rawPattern)) pattern = 'FairValueGap';
-  else if (/liquidity\s*sweep|breaker/i.test(rawPattern)) pattern = 'LiquiditySweep';
+  else if (/liquidity\s*sweep/i.test(rawPattern)) pattern = 'LiquiditySweep';
   else if (/take\s*profit/i.test(rawPattern)) pattern = 'TakeProfit';
   else if (/stop\s*loss/i.test(rawPattern)) pattern = 'StopLoss';
   else if (['OrderBlock', 'FairValueGap', 'LiquiditySweep', 'TakeProfit', 'StopLoss', 'None'].includes(rawPattern)) {
@@ -246,13 +247,7 @@ function validateDecision(raw: unknown): SMCDecision {
     : typeof obj.explanation === 'string' ? obj.explanation
     : 'SMC analysis complete.';
 
-  const patternLow = typeof obj.patternLow === 'number' ? obj.patternLow
-    : typeof obj.patternLow === 'string' && !isNaN(parseFloat(obj.patternLow)) ? parseFloat(obj.patternLow)
-    : undefined;
-
-  const patternHigh = typeof obj.patternHigh === 'number' ? obj.patternHigh
-    : typeof obj.patternHigh === 'string' && !isNaN(parseFloat(obj.patternHigh)) ? parseFloat(obj.patternHigh)
-    : undefined;
+  const parseNum = (v: unknown) => typeof v === 'number' ? v : typeof v === 'string' && !isNaN(parseFloat(v)) ? parseFloat(v) : undefined;
 
   return {
     action,
@@ -261,8 +256,11 @@ function validateDecision(raw: unknown): SMCDecision {
     amountIn: amountInStr,
     patternDetected: pattern,
     reasoning,
-    patternLow,
-    patternHigh,
+    patternLow: parseNum(obj.patternLow),
+    patternHigh: parseNum(obj.patternHigh),
+    buyAt: parseNum(obj.buyAt),
+    tpAt: parseNum(obj.tpAt),
+    slAt: parseNum(obj.slAt),
   };
 }
 

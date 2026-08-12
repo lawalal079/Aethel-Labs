@@ -332,13 +332,14 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<void> {
   let policyReason = '';
 
   if (decision.action === 'SWAP') {
-    // ── Position Sizing: 5% of Trading Wallet USDC Balance ─────────────────
+    // Position Sizing: 5% of Trading Wallet USDC Balance (min $1.00 USDC)
     if (decision.fromToken === 'USDC') {
-      const TRADE_ALLOCATION_PCT = 0.05; // 5% of wallet balance per trade
+      const TRADE_ALLOCATION_PCT = 0.05;
+      const MIN_TRADE_USDC = 1.0; // Circle App Kit minimum
       const calcSize = usdcBalanceNum * TRADE_ALLOCATION_PCT;
-      const positionSizeStr = Math.max(calcSize, 0.000001).toFixed(6);
+      const positionSizeStr = Math.max(calcSize, MIN_TRADE_USDC).toFixed(6);
       decision.amountIn = positionSizeStr;
-      console.log(`[SMC] Position Sizing: 5% of Trading Wallet balance (${usdcBalanceNum.toFixed(2)} USDC) = ${positionSizeStr} USDC`);
+      console.log(`[SMC] Position Sizing: 5% of Trading Wallet (${usdcBalanceNum.toFixed(2)} USDC) = ${positionSizeStr} USDC (min $${MIN_TRADE_USDC})`);
     }
 
     const parsedAmount = parseFloat(decision.amountIn ?? '0');
@@ -347,7 +348,9 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<void> {
     const policyResult = checkSpendPolicy({
       userAddress: tradingWalletAddress,
       amountAtomic,
-      targetAddress: process.env.MARKETPLACE_ADDRESS,
+      // No targetAddress — Circle App Kit routes swaps through its own internal DEX,
+      // not through the Marketplace contract. Passing MARKETPLACE_ADDRESS here was
+      // causing silent policy rejection on every swap attempt.
     });
     policyAllowed = policyResult.allowed;
     policyReason = policyResult.reason ?? '';
@@ -453,6 +456,7 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<void> {
     } catch (err) {
       executionError = (err as Error).message;
       console.error(`[SMC] Swap execution failed: ${executionError}`);
+      console.error(`[SMC] Swap failure details — Wallet: ${tradingWalletAddress} | From: ${fromToken} | To: ${toToken} | Amount: ${decision.amountIn}`);
     }
   }
 

@@ -11,7 +11,7 @@
  *      and execute swaps autonomously from their own Trading Wallets.
  */
 
-import { fetchBTCCandles, type OHLCCandle } from '../lib/ohlc-feed';
+import { fetchBTCCandles, fetchBTCCandles1H, type OHLCCandle } from '../lib/ohlc-feed';
 import { evaluateSMCStrategy, type SMCDecision, type SMCContext } from './smc';
 
 export interface SharedDecision extends SMCDecision {
@@ -115,9 +115,12 @@ export async function runMarketAnalystCycle(agentId: string = 'smc_alpha_executo
   const [eurUsd, btcUsd] = await Promise.all([fetchEURUSDPrice(), fetchBTCUSDPrice()]);
   const validBtcUsd = btcUsd ?? 64000;
 
-  // 2. Fetch real OHLC candles (350 15-min bars) from Coinbase Exchange
+  // 2. Fetch real OHLC candles (15m LTF + 1H HTF) from Coinbase Exchange
   _totalAnalystCoinGeckoCalls++;
-  const btcCandles = (await fetchBTCCandles()) ?? [];
+  const [btcCandles, btcCandles1H] = await Promise.all([
+    fetchBTCCandles(),
+    fetchBTCCandles1H(),
+  ]);
 
   // 3. Build neutral SMCContext for Gemini evaluation
   const smcCtx: SMCContext = {
@@ -125,7 +128,8 @@ export async function runMarketAnalystCycle(agentId: string = 'smc_alpha_executo
     activePosition: null,
     currentPrice: validBtcUsd,
     pricePairLabel: 'BTC/USD',
-    candles: btcCandles,
+    candles: btcCandles ?? [],
+    candles1H: btcCandles1H ?? [],
   };
 
   // 4. Call Gemini Flash ONCE

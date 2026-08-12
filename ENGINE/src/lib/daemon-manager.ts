@@ -101,24 +101,28 @@ async function _runCycle(entry: DaemonEntry): Promise<void> {
  * @param userAddress          Circle-verified wallet address (will be lowercased)
  * @param userRefId            Aethel internal ref/user ID (used for Trading Wallet lookup)
  * @param tradingWalletAddress Pre-assigned Circle Developer-Controlled Wallet address
- * @param intervalSeconds      How often to run the executor cycle (default 60s)
+ * @param intervalSeconds      How often the user daemon cycle runs — nanopayment + status (default 60s)
  * @param agentId              Which agent is being run
  * @param feeWalletId          Circle walletId for the user's Fee Wallet (Developer-Controlled EOA,
  *                             'aethel-fee-wallets' set) — threaded directly into deductDaemonTaskFee()
  *                             so no per-cycle wallet lookup is needed
  */
+
+/** Market Analyst Gemini call fires once per 5 minutes, shared across ALL users. */
+const ANALYST_INTERVAL_SECONDS = 300;
+
 export function startDaemon(
   userAddress: string,
   userRefId: string,
   tradingWalletAddress: string,
-  intervalSeconds = 300,
+  intervalSeconds = 60,
   agentId = 'agent_smc_alpha_executor',
   feeWalletId?: string,
 ): StartDaemonResult {
   const key = _key(userAddress);
 
-  // Ensure shared Market Analyst is running for this agentId across all users
-  ensureMarketAnalystRunning(agentId, intervalSeconds);
+  // Ensure shared Market Analyst is running once per 5 min — independent of user cycle cadence
+  ensureMarketAnalystRunning(agentId, ANALYST_INTERVAL_SECONDS);
 
   const existing = _daemons.get(key);
   if (existing) {

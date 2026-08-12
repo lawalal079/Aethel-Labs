@@ -400,12 +400,23 @@ function AgentPortal({ agent }: { agent: Agent }) {
                 patternLabel = rangeStr ? `${rawPat} Zone: ${rangeStr}` : `${rawPat}`;
               }
 
+              const buyPrice = dec.buyAt ? `$${Number(dec.buyAt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : pLow;
+              const tpPrice = dec.tpAt ? `$${Number(dec.tpAt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
+              const slPrice = dec.slAt ? `$${Number(dec.slAt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : pLow;
+
               let signalLabel = dec.action || 'HOLD';
-              if (dec.action === 'HOLD' && hasPattern) {
-                signalLabel = `HOLD (Awaiting Price Retrace into ${rangeStr || rawPat})`;
+              if (dec.action === 'HOLD') {
+                const targetText = buyPrice ? `BUY at ${buyPrice}` : (rangeStr || rawPat);
+                const tpText = tpPrice ? ` | TP ${tpPrice}` : '';
+                const slText = slPrice ? ` | SL ${slTextPrice(slPrice)}` : '';
+                signalLabel = `HOLD | Target: ${targetText}${tpText}${slText}`;
               } else if (dec.action === 'SWAP') {
-                signalLabel = `SWAP EXECUTION (${dec.fromToken} → ${dec.toToken})`;
+                const tpText = tpPrice ? ` | TP ${tpPrice}` : '';
+                const slText = slPrice ? ` | SL ${slPrice}` : '';
+                signalLabel = `SWAP EXECUTION (${dec.fromToken} → ${dec.toToken}) | Entry ${priceText}${tpText}${slText}`;
               }
+
+              function slTextPrice(p: string) { return p; }
 
               newLines.push({
                 id: `daemon-dec-${data.cycleCount}-${Date.now()}`,
@@ -424,7 +435,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
               newLines.push({
                 id: `daemon-chart-${data.cycleCount}-${Date.now()}`,
                 type: 'system',
-                text: `[Market Data Verification] Live Spot Chart: https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT`,
+                text: `[Market Data Verification] Live Spot Chart: https://www.tradingview.com/chart/?symbol=COINBASE:BTCUSD`,
                 ts: nowTs(),
               });
             }

@@ -18,6 +18,7 @@ export interface OHLCCandle {
 
 /**
  * Fetches 350 real 15-minute OHLC market candles for BTC/USD directly from Coinbase Exchange.
+ * Used for LTF (Lower Time Frame) entry timing: FVG, Liquidity Sweeps within an HTF zone.
  */
 export async function fetchBTCCandles(): Promise<OHLCCandle[] | null> {
   try {
@@ -40,13 +41,50 @@ export async function fetchBTCCandles(): Promise<OHLCCandle[] | null> {
 
         candles.sort((a, b) => a.time - b.time);
         console.log(
-          `[OHLCFeed] ✓ Coinbase BTC/USD: ${candles.length} real OHLC candles (15m) — latest close: $${candles.at(-1)?.close}`
+          `[OHLCFeed] ✓ Coinbase BTC/USD 15m: ${candles.length} real OHLC candles — latest close: $${candles.at(-1)?.close}`
         );
         return candles;
       }
     }
   } catch (err) {
-    console.warn('[OHLCFeed] Coinbase BTC/USD OHLC failed:', (err as Error).message);
+    console.warn('[OHLCFeed] Coinbase BTC/USD 15m OHLC failed:', (err as Error).message);
+  }
+
+  return null;
+}
+
+/**
+ * Fetches ~350 real 1-hour OHLC market candles for BTC/USD from Coinbase Exchange.
+ * Used for HTF (Higher Time Frame) structure analysis: OrderBlocks, Breaker Blocks, BOS.
+ */
+export async function fetchBTCCandles1H(): Promise<OHLCCandle[] | null> {
+  try {
+    const url = 'https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=3600';
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(8_000),
+    });
+
+    if (res.ok) {
+      const raw = (await res.json()) as number[][];
+      if (Array.isArray(raw) && raw.length > 0) {
+        const candles: OHLCCandle[] = raw.map(item => ({
+          time: Number(item[0]) * 1000,
+          open: Number(item[3]),
+          high: Number(item[2]),
+          low: Number(item[1]),
+          close: Number(item[4]),
+        }));
+
+        candles.sort((a, b) => a.time - b.time);
+        console.log(
+          `[OHLCFeed] ✓ Coinbase BTC/USD 1H: ${candles.length} real OHLC candles — latest close: $${candles.at(-1)?.close}`
+        );
+        return candles;
+      }
+    }
+  } catch (err) {
+    console.warn('[OHLCFeed] Coinbase BTC/USD 1H OHLC failed:', (err as Error).message);
   }
 
   return null;
