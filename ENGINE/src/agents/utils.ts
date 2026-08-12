@@ -356,7 +356,7 @@ ${JSON.stringify(dataPayload, null, 2)}`;
     throw new Error(`Gemini API permanent error HTTP ${response.status} on ${keyLabel}: ${errBody}`);
   }
 
-  throw lastError ?? new Error(`Gemini API failed after ${maxAttempts} attempts across ${GEMINI_KEYS.length} keys.`);
+  throw lastError ?? new Error(`Gemini API failed after ${maxAttempts} attempts across ${pool.length} keys.`);
 }
 
 
