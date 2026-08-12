@@ -536,7 +536,7 @@ export default function Marketplace() {
 
       {/* Process Banner */}
       <div className="w-full bg-[#1A1D20] rounded-xl py-3 px-6 flex items-center justify-between overflow-x-auto select-none border border-[#2A2F35]">
-        <div className="flex items-center gap-8 min-w-[760px] w-full justify-between text-neutral-300 text-[13px] font-medium">
+        <div className="flex items-center gap-4 flex-wrap w-full justify-between text-neutral-300 text-[13px] font-medium">
           <div className="flex items-center gap-2"><Upload size={16} weight="bold" className="text-[#4E8981]" /><span className="text-white">Agent Deployment</span></div>
           <span className="text-[#2A2F35] font-bold">&gt;</span>
           <div className="flex items-center gap-2"><CheckCircle size={16} weight="bold" className="text-[#8a8f98]" /><span>Task Assignment</span></div>

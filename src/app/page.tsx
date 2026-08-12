@@ -13,7 +13,7 @@ export default function Home() {
   return (
     <Web3Provider>
       <AppProvider>
-        <div className="h-screen w-screen bg-[#0B0B0C] text-[#e5e2e1] overflow-hidden p-4 font-sans flex gap-4">
+        <div className="h-screen w-full bg-[#0B0B0C] text-[#e5e2e1] overflow-hidden p-4 font-sans flex gap-4">
           {/* Vertical Sidebar Component */}
           <Sidebar />
 
@@ -23,7 +23,7 @@ export default function Home() {
             <Header />
 
             {/* Active main tab workspace view - this is the ONLY scrollable area */}
-            <main className="flex-1 overflow-y-auto min-h-0 pr-1 pb-2 scrollbar-none [&::-webkit-scrollbar]:hidden">
+            <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 pr-1 pb-2 scrollbar-none [&::-webkit-scrollbar]:hidden">
               <Workspace />
             </main>
 
