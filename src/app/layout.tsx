@@ -19,10 +19,10 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className="h-full antialiased"
+      className="h-full overflow-hidden antialiased"
       suppressHydrationWarning
     >
-      <body className="min-h-full bg-black text-[#e5e2e1] font-sans antialiased">
+      <body className="h-full overflow-hidden bg-black text-[#e5e2e1] font-sans antialiased">
         {children}
       </body>
     </html>

@@ -3,6 +3,12 @@
 @tailwind utilities;
 
 @layer base {
+  html, body {
+    overflow: hidden;
+    height: 100%;
+    width: 100%;
+  }
+
   body {
     background-color: #0B0B0C;
     color: #e5e2e1;
