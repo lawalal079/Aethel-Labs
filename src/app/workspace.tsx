@@ -12,7 +12,7 @@ export default function Workspace() {
   const { activeTab } = useApp();
 
   return (
-    <div className="flex-1 w-full py-4">
+    <div className="flex-1 h-0 min-h-0 w-full overflow-y-auto overflow-x-hidden py-4 scrollbar-none">
       {activeTab === 'marketplace' && <Marketplace />}
       {activeTab === 'my-agents' && <MyAgents />}
       {activeTab === 'workflows' && <Workflows />}

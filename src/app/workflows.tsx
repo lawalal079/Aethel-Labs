@@ -823,7 +823,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
   };
 
   return (
-    <div className="relative flex flex-col rounded-xl border border-[#2A2F35] bg-[#0B0B0C] overflow-hidden" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+    <div className="relative flex flex-col rounded-xl border border-[#2A2F35] bg-[#0B0B0C] overflow-hidden">
       {/* Console top bar */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#2A2F35] bg-[#0f1214] shrink-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -859,7 +859,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-3 space-y-4 scrollbar-none"
+        className="flex-1 overflow-y-auto px-4 py-3 space-y-4 scrollbar-none max-h-[380px]"
       >
         {messages.map(line => {
           if (line.type === 'user') {
