@@ -1,5 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import dotenv from 'dotenv';
+
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 export const GEMINI_MODEL = 'gemini-2.5-flash';
 
@@ -222,29 +226,35 @@ const GEMINI_RATE_LIMIT_CODE = 429;           // rotate key immediately, no dela
 const GEMINI_OVERLOAD_CODES  = new Set([503, 529]); // rotate key + brief backoff
 
 // ── API Key Pool ──────────────────────────────────────────────────────────────
-// Reads all configured Gemini keys at startup. Add more by adding GEMINI_API_KEY7,
-// GEMINI_API_KEY8… to your .env. Keys are filtered so missing vars are silently skipped.
-const GEMINI_KEYS: string[] = [
-  process.env.GEMINI_API_KEY,
-  process.env.GEMINI_API_KEY2,
-  process.env.GEMINI_API_KEY3,
-  process.env.GEMINI_API_KEY4,
-  process.env.GEMINI_API_KEY5,
-  process.env.GEMINI_API_KEY6,
-  process.env.GEMINI_KEY_7,
-  process.env.GEMINI_KEY_8,
-  process.env.GEMINI_KEY_9,
-].filter((k): k is string => typeof k === 'string' && k.trim().length > 0);
+// Reads all configured Gemini keys dynamically at runtime.
+function getGeminiKeysPool(): string[] {
+  const keys: string[] = [];
+  Object.keys(process.env).forEach(envKey => {
+    if (/^GEMINI_API_KEY/i.test(envKey) || /^NEXT_PUBLIC_GEMINI_API_KEY/i.test(envKey) || /^GEMINI_KEY/i.test(envKey)) {
+      const val = process.env[envKey];
+      if (val) {
+        val.split(',').forEach(k => {
+          const trimmed = k.trim();
+          if (trimmed && !keys.includes(trimmed)) {
+            keys.push(trimmed);
+          }
+        });
+      }
+    }
+  });
+  return keys;
+}
 
 // Shared round-robin cursor — persists across calls so keys are reused evenly
 let geminiKeyIndex = 0;
 
 function getNextGeminiKey(): string {
-  if (GEMINI_KEYS.length === 0) {
+  const pool = getGeminiKeysPool();
+  if (pool.length === 0) {
     throw new Error('No Gemini API keys configured. Set GEMINI_API_KEY (and optionally GEMINI_API_KEY2…6) in ENGINE/.env');
   }
-  const key = GEMINI_KEYS[geminiKeyIndex % GEMINI_KEYS.length];
-  geminiKeyIndex = (geminiKeyIndex + 1) % GEMINI_KEYS.length;
+  const key = pool[geminiKeyIndex % pool.length];
+  geminiKeyIndex = (geminiKeyIndex + 1) % pool.length;
   return key;
 }
 
@@ -259,7 +269,8 @@ function getNextGeminiKey(): string {
  * Total attempts = GEMINI_KEYS.length × 2 full rotations before giving up.
  */
 export async function callGemini(systemPrompt: string, dataPayload: object): Promise<string> {
-  if (GEMINI_KEYS.length === 0) {
+  const pool = getGeminiKeysPool();
+  if (pool.length === 0) {
     throw new Error('No Gemini API keys configured. Set GEMINI_API_KEY in ENGINE/.env');
   }
 
@@ -269,13 +280,13 @@ LIVE DATA PAYLOAD (use these exact values in your output — do not fabricate an
 ${JSON.stringify(dataPayload, null, 2)}`;
 
   // Allow up to 2 full rotations through all available keys
-  const maxAttempts = GEMINI_KEYS.length * 2;
+  const maxAttempts = pool.length * 2;
   let lastError: Error | null = null;
   let backoffMs = 1500;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const apiKey = getNextGeminiKey();
-    const keyLabel = `key[${((geminiKeyIndex - 1 + GEMINI_KEYS.length) % GEMINI_KEYS.length) + 1}/${GEMINI_KEYS.length}]`;
+    const keyLabel = `key[${((geminiKeyIndex - 1 + pool.length) % pool.length) + 1}/${pool.length}]`;
 
     let response: Response;
     // 90-second per-attempt abort signal — prevents request from hanging indefinitely

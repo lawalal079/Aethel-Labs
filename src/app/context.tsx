@@ -771,7 +771,7 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
           // Licenses are now issued to the Fee Wallet (not the User-Controlled wallet).
           feeWalletAddress: feeWalletAddress ?? null,
           agentId,
-          intervalSeconds: 300,
+          intervalSeconds: 60,
         }),
       });
       const data = await res.json();

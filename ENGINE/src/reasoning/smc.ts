@@ -286,6 +286,14 @@ export async function evaluateSMCStrategy(ctx: SMCContext): Promise<SMCDecision>
       }
     }
 
+    // Repair unclosed JSON strings or missing closing braces from LLM output
+    if (cleanJson.startsWith('{') && !cleanJson.endsWith('}')) {
+      if ((cleanJson.match(/"/g) || []).length % 2 !== 0) {
+        cleanJson += '"';
+      }
+      cleanJson += '}';
+    }
+
     const parsed = JSON.parse(cleanJson);
     const validated = validateDecision(parsed);
     console.log(`[SMC] Validated SMC Decision: Action=${validated.action} | Pattern=${validated.patternDetected} | Reasoning="${validated.reasoning}"`);
