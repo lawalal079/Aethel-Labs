@@ -418,7 +418,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
               newLines.push({
                 id: `daemon-reason-${data.cycleCount}-${Date.now()}`,
                 type: 'system',
-                text: `[Gemini 2.0 Flash Reasoning] "${dec.reasoning}"`,
+                text: `[Gemini 2.5 Flash Reasoning] "${dec.reasoning}"`,
                 ts: nowTs(),
               });
               newLines.push({
@@ -838,27 +838,28 @@ function AgentPortal({ agent }: { agent: Agent }) {
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {showScrollBottomBtn && (
-            <button
-              type="button"
-              onClick={() => scrollToBottom(true)}
-              className="flex items-center gap-1 px-2 py-0.5 bg-[#4E8981]/25 hover:bg-[#4E8981]/40 text-[#4E8981] border border-[#4E8981]/50 text-[9px] font-mono font-bold rounded transition-all cursor-pointer animate-pulse active:scale-95 shrink-0"
-              title="Jump to Latest Logs"
-            >
-              <ArrowDown size={11} className="stroke-[3]" />
-              <span>Latest</span>
-            </button>
-          )}
           <span className="text-[9px] text-[#4E8981]/60 font-mono font-semibold border border-[#4E8981]/20 px-2 py-0.5 rounded">
             NODE: ACTIVE
           </span>
         </div>
       </div>
 
-      {/* Log output */}
-      <div
-        ref={scrollContainerRef}
-        onScroll={handleScroll}
+      {/* Log output — relative container so the floating Latest button can anchor to it */}
+      <div className="relative">
+        {showScrollBottomBtn && (
+          <button
+            type="button"
+            onClick={() => scrollToBottom(true)}
+            className="absolute bottom-3 right-3 z-10 flex items-center gap-1 px-2.5 py-1 bg-[#4E8981]/25 hover:bg-[#4E8981]/40 text-[#4E8981] border border-[#4E8981]/50 text-[9px] font-mono font-bold rounded-lg shadow-lg transition-all cursor-pointer animate-pulse active:scale-95"
+            title="Jump to Latest Logs"
+          >
+            <ArrowDown size={11} className="stroke-[3]" />
+            <span>Latest</span>
+          </button>
+        )}
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
         className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 space-y-4 scrollbar-none max-h-[380px]"
       >
         {messages.map(line => {
@@ -1428,6 +1429,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
         })}
         <div ref={bottomRef} />
       </div>
+    </div>
 
 
 

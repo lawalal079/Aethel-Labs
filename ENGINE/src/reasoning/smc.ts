@@ -12,7 +12,7 @@
  * - Decision lock-in: SWAP decisions are cached and re-served when API is exhausted
  */
 
-import { GoogleGenAI } from '@google/genai';
+import { callGemini } from '../agents/utils';
 import { formatCandlesForPrompt, type OHLCCandle } from '../lib/ohlc-feed';
 
 // ── API Key Rotation ──────────────────────────────────────────────────────────
@@ -257,58 +257,26 @@ function validateDecision(raw: unknown): SMCDecision {
 // ── Gemini Evaluation Entry Point ─────────────────────────────────────────────
 
 export async function evaluateSMCStrategy(ctx: SMCContext): Promise<SMCDecision> {
-  const apiKey = getNextApiKey();
-
-  if (!apiKey) {
-    console.warn('[SMC] GEMINI_API_KEY missing — checking locked decision...');
-    const locked = getLockedDecision();
-    if (locked) {
-      console.log('[SMC] ♻️ Re-serving locked SWAP decision (no API key available).');
-      return locked;
-    }
-    return {
-      action: 'HOLD',
-      fromToken: 'USDC',
-      toToken: 'USDC',
-      amountIn: '0.00',
-      patternDetected: 'None',
-      reasoning: 'GEMINI_API_KEY not configured — agent holding in USDC.',
-    };
-  }
-
   try {
-    const ai = new GoogleGenAI({ apiKey });
-
     const promptText = buildSMCPrompt(ctx);
-    console.log(`[SMC] Sending ${ctx.candles.length} candles to Gemini Flash (key #${_keyIndex}) for SMC evaluation...`);
+    console.log(`[SMC] Sending ${ctx.candles.length} candles to Gemini 2.5 Flash for SMC evaluation...`);
 
-    let responseText = '';
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash',
-        contents: promptText,
-        config: {
-          responseMimeType: 'application/json',
-          temperature: 0.1,
-        },
-      });
-      responseText = response.text?.trim() ?? '';
-    } catch (modelErr: any) {
-      console.warn(`[SMC] gemini-2.0-flash failed (${modelErr?.message || modelErr}), trying gemini-1.5-flash fallback...`);
-      const response = await ai.models.generateContent({
-        model: 'gemini-1.5-flash',
-        contents: promptText,
-        config: {
-          responseMimeType: 'application/json',
-          temperature: 0.1,
-        },
-      });
-      responseText = response.text?.trim() ?? '';
-    }
-
+    const responseText = await callGemini(promptText, {});
     console.log(`[SMC] Gemini Flash Raw Response: ${responseText}`);
 
-    const parsed = JSON.parse(responseText);
+    let cleanJson = responseText.trim();
+    const jsonMatch = cleanJson.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (jsonMatch) {
+      cleanJson = jsonMatch[1].trim();
+    } else if (!cleanJson.startsWith('{')) {
+      const firstBrace = cleanJson.indexOf('{');
+      const lastBrace = cleanJson.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        cleanJson = cleanJson.substring(firstBrace, lastBrace + 1);
+      }
+    }
+
+    const parsed = JSON.parse(cleanJson);
     const validated = validateDecision(parsed);
     console.log(`[SMC] Validated SMC Decision: Action=${validated.action} | Pattern=${validated.patternDetected} | Reasoning="${validated.reasoning}"`);
 
@@ -329,10 +297,8 @@ export async function evaluateSMCStrategy(ctx: SMCContext): Promise<SMCDecision>
     }
 
     let cleanReasoning = `Gemini API fallback — holding position safely.`;
-    if (rawMsg.includes('429') || rawMsg.includes('RESOURCE_EXHAUSTED')) {
+    if (rawMsg.includes('429') || rawMsg.includes('RESOURCE_EXHAUSTED') || rawMsg.includes('Quota')) {
       cleanReasoning = `Gemini API daily/min quota limit reached (429) — holding position safely until reset.`;
-    } else if (rawMsg.includes('404') || rawMsg.includes('NOT_FOUND')) {
-      cleanReasoning = `Gemini model endpoint updating — holding position safely.`;
     }
 
     return {
