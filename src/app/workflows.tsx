@@ -859,7 +859,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-3 space-y-4 scrollbar-none max-h-[380px]"
+        className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 space-y-4 scrollbar-none max-h-[380px]"
       >
         {messages.map(line => {
           if (line.type === 'user') {
@@ -877,8 +877,8 @@ function AgentPortal({ agent }: { agent: Agent }) {
             const parsed = parseAgentResult(line.text);
             if (!parsed.isParsed) {
               return (
-                <div key={line.id} className="flex justify-start w-full">
-                  <div className="max-w-[90%] w-full rounded-2xl px-4 py-3 bg-[#16191C]/80 border border-[#2A2F35] text-[#c1c6d5] font-sans text-xs shadow-md space-y-2">
+                <div key={line.id} className="flex justify-start w-full min-w-0">
+                  <div className="max-w-[90%] w-full min-w-0 overflow-hidden rounded-2xl px-4 py-3 bg-[#16191C]/80 border border-[#2A2F35] text-[#c1c6d5] font-sans text-xs shadow-md space-y-2">
                     <div className="flex items-center justify-between text-[9px] text-[#8a8f98] font-mono border-b border-[#2A2F35] pb-1">
                       <span>RESULT</span>
                       <span>[{line.ts}]</span>
@@ -892,8 +892,8 @@ function AgentPortal({ agent }: { agent: Agent }) {
 
 
             return (
-              <div key={line.id} className="flex justify-start w-full">
-                <div className="max-w-[95%] w-full rounded-2xl border border-[#4E8981]/25 p-5 bg-[#121416]/90 space-y-4 shadow-lg backdrop-blur-md">
+              <div key={line.id} className="flex justify-start w-full min-w-0">
+                <div className="max-w-[95%] w-full min-w-0 overflow-hidden rounded-2xl border border-[#4E8981]/25 p-5 bg-[#121416]/90 space-y-4 shadow-lg backdrop-blur-md">
                   {/* Title / Header */}
                   <div className="flex items-center gap-2 border-b border-[#2A2F35] pb-2">
                     <Cpu size={16} className="text-[#4E8981]" />
@@ -1533,7 +1533,7 @@ export default function Workflows() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-6 items-start w-full min-w-0">
+      <div className="grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] gap-6 items-start w-full min-w-0">
 
         {/* ── Left: Deployed agent selector ─────────────────────────────────── */}
         <div className="bg-[#1A1D20] border border-[#2A2F35] rounded-xl overflow-hidden">
