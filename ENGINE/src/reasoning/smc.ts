@@ -126,15 +126,27 @@ export interface SMCDecision {
 function buildSMCPrompt(ctx: SMCContext): string {
   const candleCount = ctx.candles.length;
 
-  const positionBlock = ctx.activePosition
-    ? `ACTIVE POSITION:
+  const hasCirBTC = Number(ctx.balances.cirBTC) > 0.00000001;
+  const hasEURC   = Number(ctx.balances.EURC) > 0.01;
+
+  let positionBlock = '';
+  if (ctx.activePosition) {
+    positionBlock = `ACTIVE POSITION:
   - Asset Held:   ${ctx.activePosition.heldAsset}
   - Entry Price:  $${ctx.activePosition.entryPrice}
   - Current Spot: $${ctx.currentPrice}
   - Profit/Loss:  ${calculatePnl(ctx.activePosition.entryPrice, ctx.currentPrice)}%
   - Target TP:    $${ctx.activePosition.tpPrice ?? 'N/A'} (1:2 R:R)
-  - Target SL:    $${ctx.activePosition.slPrice ?? 'N/A'} (Structural Pattern Low)`
-    : `ACTIVE POSITION: None (Portfolio is in 100% USDC, looking for SMC entry setup)`;
+  - Target SL:    $${ctx.activePosition.slPrice ?? 'N/A'} (Structural Pattern Low)`;
+  } else if (hasCirBTC || hasEURC) {
+    const heldAssets = [
+      hasCirBTC ? `${ctx.balances.cirBTC} cirBTC` : '',
+      hasEURC ? `${ctx.balances.EURC} EURC` : ''
+    ].filter(Boolean).join(' and ');
+    positionBlock = `ACTIVE POSITION: User wallet currently holds ${heldAssets}. Evaluate Take Profit, Stop Loss, and Bearish Resistance exit setups to SWAP back to USDC.`;
+  } else {
+    positionBlock = `ACTIVE POSITION: Portfolio is in 100% USDC cash. Evaluate bullish SMC entry setups to SWAP from USDC into cirBTC or EURC.`;
+  }
 
   const candleBlock = candleCount > 0
     ? `OHLC CANDLE DATA (30-min bars, oldest → newest, last ${Math.min(candleCount, 40)} shown):

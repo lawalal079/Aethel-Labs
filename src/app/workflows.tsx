@@ -395,7 +395,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
               const pHigh = dec.patternHigh ? `$${Number(dec.patternHigh).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
               const rangeStr = (pLow && pHigh) ? `${pLow} – ${pHigh}` : null;
 
-              let patternLabel = 'None (Scanning 336 candles / 7d)';
+              let patternLabel = 'None';
               if (hasPattern) {
                 patternLabel = rangeStr ? `${rawPat} Zone: ${rangeStr}` : `${rawPat}`;
               }
@@ -418,7 +418,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
               newLines.push({
                 id: `daemon-reason-${data.cycleCount}-${Date.now()}`,
                 type: 'system',
-                text: `[Gemini 2.5 Flash Reasoning] "${dec.reasoning}"`,
+                text: `[Agent Reasoning] "${dec.reasoning}"`,
                 ts: nowTs(),
               });
               newLines.push({
