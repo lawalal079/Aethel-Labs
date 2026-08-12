@@ -826,27 +826,39 @@ function AgentPortal({ agent }: { agent: Agent }) {
     <div className="relative flex flex-col h-full rounded-xl border border-[#2A2F35] bg-[#0B0B0C] overflow-hidden">
       {/* Console top bar */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#2A2F35] bg-[#0f1214] shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-[10px] font-bold text-[#4E8981] tracking-widest uppercase font-mono">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+          <span className="text-[10px] font-bold text-[#4E8981] tracking-widest uppercase font-mono truncate">
             {agent.id} — Live Console
           </span>
           {maxBudgetLimit !== null && (
-            <span className="text-[9px] font-mono text-[#8a8f98] bg-[#1A1D20] border border-[#2A2F35] px-1.5 py-0.5 rounded">
+            <span className="text-[9px] font-mono text-[#8a8f98] bg-[#1A1D20] border border-[#2A2F35] px-1.5 py-0.5 rounded shrink-0">
               Available: {maxBudgetLimit.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 6 })} USDC
             </span>
           )}
         </div>
-        <span className="text-[9px] text-[#4E8981]/60 font-mono font-semibold border border-[#4E8981]/20 px-2 py-0.5 rounded">
-          NODE: ACTIVE
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          {showScrollBottomBtn && (
+            <button
+              type="button"
+              onClick={() => scrollToBottom(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-[#4E8981]/20 hover:bg-[#4E8981]/35 text-[#4E8981] border border-[#4E8981]/50 text-[10px] font-mono font-bold rounded-lg transition-all cursor-pointer animate-pulse active:scale-95"
+            >
+              <ArrowDown size={12} className="stroke-[2.5]" />
+              <span>Jump to Latest</span>
+            </button>
+          )}
+          <span className="text-[9px] text-[#4E8981]/60 font-mono font-semibold border border-[#4E8981]/20 px-2 py-0.5 rounded">
+            NODE: ACTIVE
+          </span>
+        </div>
       </div>
 
       {/* Log output */}
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-3 pb-14 space-y-4 scrollbar-none min-h-[300px] max-h-[500px]"
+        className="flex-1 overflow-y-auto px-4 py-3 space-y-4 scrollbar-none min-h-[300px] max-h-[500px]"
       >
         {messages.map(line => {
           if (line.type === 'user') {
@@ -1416,17 +1428,7 @@ function AgentPortal({ agent }: { agent: Agent }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Floating Jump-to-Bottom Arrow Button */}
-      {showScrollBottomBtn && (
-        <button
-          type="button"
-          onClick={() => scrollToBottom(true)}
-          className="absolute bottom-12 right-6 flex items-center gap-2 px-3.5 py-2 bg-gradient-to-r from-[#4E8981] to-[#3b6d67] hover:from-[#3b6d67] hover:to-[#2e5954] text-white text-[11px] font-mono font-bold rounded-full shadow-2xl border border-teal-300/40 transition-all transform hover:scale-105 active:scale-95 z-30 cursor-pointer whitespace-nowrap shrink-0"
-        >
-          <ArrowDown size={14} className="stroke-[2.5]" />
-          <span>Jump to Latest</span>
-        </button>
-      )}
+
 
       {/* Autonomous Status Bar */}
       <div className="flex items-center justify-between px-4 py-2.5 border-t border-[#2A2F35] bg-[#0f1214] shrink-0 text-[11px] font-mono">
@@ -1523,8 +1525,8 @@ export default function Workflows() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div>
-        <h1 className="text-[28px] font-bold text-white mb-1 tracking-tight">Agent Portal</h1>
+      <div className="w-full overflow-visible">
+        <h1 className="text-[28px] font-bold text-white mb-1 tracking-tight font-sans">Agent Portal</h1>
         <p className="text-[#8a8f98] text-sm">
           Select a deployed agent and assign operational directives.
         </p>
