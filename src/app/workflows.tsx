@@ -391,8 +391,15 @@ function AgentPortal({ agent }: { agent: Agent }) {
               const rawPat = dec.patternDetected || dec.pattern;
               const hasPattern = rawPat && rawPat !== 'None';
 
-              const pLow = dec.patternLow ? `$${Number(dec.patternLow).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
-              const pHigh = dec.patternHigh ? `$${Number(dec.patternHigh).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
+              const safePriceStr = (val: any): string | null => {
+                if (val === null || val === undefined || val === '') return null;
+                const n = Number(val);
+                if (isNaN(n) || !isFinite(n) || n <= 0) return null;
+                return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+              };
+
+              const pLow = safePriceStr(dec.patternLow);
+              const pHigh = safePriceStr(dec.patternHigh);
               const rangeStr = (pLow && pHigh) ? `${pLow} – ${pHigh}` : null;
 
               let patternLabel = 'None';
@@ -400,23 +407,21 @@ function AgentPortal({ agent }: { agent: Agent }) {
                 patternLabel = rangeStr ? `${rawPat} Zone: ${rangeStr}` : `${rawPat}`;
               }
 
-              const buyPrice = dec.buyAt ? `$${Number(dec.buyAt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : pLow;
-              const tpPrice = dec.tpAt ? `$${Number(dec.tpAt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
-              const slPrice = dec.slAt ? `$${Number(dec.slAt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : pLow;
+              const buyPrice = safePriceStr(dec.buyAt) || pLow;
+              const tpPrice = safePriceStr(dec.tpAt);
+              const slPrice = safePriceStr(dec.slAt) || pLow;
 
               let signalLabel = dec.action || 'HOLD';
               if (dec.action === 'HOLD') {
                 const targetText = buyPrice ? `BUY at ${buyPrice}` : (rangeStr || rawPat);
                 const tpText = tpPrice ? ` | TP ${tpPrice}` : '';
-                const slText = slPrice ? ` | SL ${slTextPrice(slPrice)}` : '';
+                const slText = slPrice ? ` | SL ${slPrice}` : '';
                 signalLabel = `HOLD | Target: ${targetText}${tpText}${slText}`;
               } else if (dec.action === 'SWAP') {
                 const tpText = tpPrice ? ` | TP ${tpPrice}` : '';
                 const slText = slPrice ? ` | SL ${slPrice}` : '';
                 signalLabel = `SWAP EXECUTION (${dec.fromToken} → ${dec.toToken}) | Entry ${priceText}${tpText}${slText}`;
               }
-
-              function slTextPrice(p: string) { return p; }
 
               newLines.push({
                 id: `daemon-dec-${data.cycleCount}-${Date.now()}`,
