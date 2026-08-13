@@ -8,7 +8,7 @@ import { useApp } from './context';
 export default function Header() {
   const [mounted, setMounted] = useState(false);
   const { shortAddress, walletBalance, spendingBalance, isConnected, authStatusMessage } = useWalletDisplay();
-  const { loginWithGoogle, logout, isConnecting, walletAddress, feeWalletAddress, feeWalletBalance } = useCircleWallet();
+  const { loginWithGoogle, logout, isConnecting, walletAddress, feeWalletAddress, feeWalletBalance, tradingWalletAddress } = useCircleWallet();
   const { topUpBalance, executionLogs } = useApp();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [notifsOpen, setNotifsOpen] = useState(false);
@@ -22,9 +22,9 @@ export default function Header() {
 
   const isActuallyConnected = mounted && isConnected;
 
-  const displayFeeAddress = feeWalletAddress ?? null;
-  const shortFeeAddress = feeWalletAddress
-    ? `${feeWalletAddress.slice(0, 6)}...${feeWalletAddress.slice(-4)}`
+  const displayFeeAddress = feeWalletAddress ?? tradingWalletAddress ?? null;
+  const shortFeeAddress = displayFeeAddress
+    ? `${displayFeeAddress.slice(0, 6)}...${displayFeeAddress.slice(-4)}`
     : 'Provisioning...';
 
   const handleCopy = () => {
@@ -173,12 +173,12 @@ export default function Header() {
             {/* Modal Title */}
             <div className="flex items-center gap-2 border-b border-[#23272C] pb-3">
               <div className="w-2.5 h-2.5 rounded-full bg-[#4E8981] animate-pulse" />
-              <h3 className="font-semibold text-sm text-white tracking-wide">Wallet Account</h3>
+              <h3 className="font-semibold text-sm text-white tracking-wide">Developer-Controlled Wallet</h3>
             </div>
 
             {/* Wallet Address section */}
             <div className="flex flex-col gap-1.5">
-              <span className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider">Fee Wallet Address</span>
+              <span className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider">Dev-Controlled Wallet Address</span>
               <div className="flex items-center justify-between p-3 bg-[#1A1D20] border border-[#2A2F35] rounded-xl gap-2">
                 <span className="font-mono text-xs text-white truncate flex-1">{displayFeeAddress || 'Provisioning...'}</span>
                 <button
@@ -209,7 +209,7 @@ export default function Header() {
               </div>
               <div className="flex flex-col gap-1 p-3 bg-[#1A1D20] border border-[#4E8981]/30 rounded-xl">
                 <span className="text-[9px] font-bold text-[#4E8981] uppercase tracking-wider">Spending Balance</span>
-                <span className="font-mono text-sm font-bold text-white">{feeWalletBalance} <span className="text-[10px] text-[#8a8f98] font-normal">USDC</span></span>
+                <span className="font-mono text-sm font-bold text-white">{spendingBalance} <span className="text-[10px] text-[#8a8f98] font-normal">USDC</span></span>
                 <span className="text-[8px] text-[#8a8f98]">Gateway (task fees)</span>
               </div>
             </div>

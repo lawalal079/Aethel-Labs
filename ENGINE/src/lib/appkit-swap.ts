@@ -138,9 +138,8 @@ export async function estimateSwap({
     return { amountOut, appFeeBps, effectiveRate };
   } catch (err: any) {
     if (isTestnetRouteError(err)) {
-      console.log(`[AppKitSwap] Testnet DEX route unavailable for ${tokenIn} -> ${tokenOut} on Arc Testnet — using testnet conversion fallback.`);
-      const fallback = calculateTestnetSwapOutput(tokenIn, tokenOut, amountIn);
-      return { amountOut: fallback.amountOut, appFeeBps, effectiveRate: fallback.effectiveRate };
+      console.warn(`[AppKitSwap] kit().estimateSwap() unavailable: No route for ${tokenIn} -> ${tokenOut} on Arc Testnet.`);
+      throw new Error(`No swap route available for ${tokenIn} -> ${tokenOut} on Arc Testnet (Circle Error: No route available)`);
     }
 
     const fullMsg = err instanceof Error ? err.message : String(err);
@@ -224,10 +223,8 @@ export async function executeSwap({
         throw err2;
       }
     } else if (isTestnetRouteError(err)) {
-      const fallback = calculateTestnetSwapOutput(tokenIn, tokenOut, amountIn);
-      const txHash = `0xarc_${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
-      console.log(`[AppKitSwap] ✓ Testnet swap executed (route fallback): Tx=${txHash} | Out=${fallback.amountOut} ${tokenOut}`);
-      return { amountOut: fallback.amountOut, txHash };
+      console.warn(`[AppKitSwap] Live kit().swap() failed: Arc Testnet route unavailable for ${tokenIn} -> ${tokenOut}.`);
+      throw new Error(`Arc Testnet DEX route unavailable for ${tokenIn} -> ${tokenOut} (Circle Error: No route available)`);
     } else {
       console.error("[AppKitSwap] Live kit().swap() failed:", String(err));
       throw err;

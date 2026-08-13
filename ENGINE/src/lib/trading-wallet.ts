@@ -87,6 +87,7 @@ async function findWalletByRefId(
   do {
     const listParams: any = {
       pageSize: 50,
+      ...(walletSetId ? { walletSetId } : {}),
       ...(pageAfter ? { pageAfter } : {}),
     };
 
@@ -155,18 +156,26 @@ export async function getOrAssignTradingWallet(userRefId: string): Promise<Tradi
   try {
     const client = getCircleClient();
     const walletSetId = await getOrCreatePlatformWalletSet();
+    
+    // 1. Check if Circle Developer-Controlled Wallet already exists for this userRefId
     const existing = await findWalletByRefId(client, walletSetId, normRef);
     if (existing) {
       _walletCache.set(normRef, existing);
       return existing;
     }
 
+    // 2. Create a new real Developer-Controlled Wallet in Circle Console
+    //    Use deterministic idempotencyKey so repeated calls for the same user don't create duplicates
+    const idempotencyKey = toUUID(normRef + '_trading_idempotency_v1');
+    console.log(`[TradingWallet] Creating real Circle Dev-Controlled Wallet for userRefId: ${normRef} (idempotencyKey: ${idempotencyKey})...`);
     const createRes: any = await client.createWallets({
+      idempotencyKey,
       walletSetId,
       count: 1,
       blockchains: ['ARC-TESTNET' as any],
       refId: normRef,
     } as any);
+
     const newW = createRes.data?.wallets?.[0];
     if (newW?.id && newW?.address) {
       const walletObj: TradingWallet = {
@@ -175,13 +184,15 @@ export async function getOrAssignTradingWallet(userRefId: string): Promise<Tradi
         walletSetId: newW.walletSetId || walletSetId,
         refId: normRef,
       };
+      console.log(`[TradingWallet] ✓ Provisioned real Circle Dev-Controlled Wallet: ID=${walletObj.id} Address=${walletObj.address}`);
       _walletCache.set(normRef, walletObj);
       return walletObj;
     }
   } catch (err: any) {
-    console.warn(`[TradingWallet] Circle API lookup/creation failed for user ${normRef}:`, err?.message ?? err);
+    console.warn(`[TradingWallet] Circle API wallet creation failed for user ${normRef}:`, err?.message ?? err);
   }
 
+  // Fallback to deterministic derived EOA if Circle API fails
   const fallbackWallet = deriveUserWallet(normRef, false);
   _walletCache.set(normRef, fallbackWallet);
   return fallbackWallet;
@@ -225,10 +236,35 @@ export async function getOrAssignFeeWallet(userRefId: string): Promise<FeeWallet
   try {
     const client = getCircleClient();
     const walletSetId = await getOrCreatePlatformWalletSet();
-    const existing = await findWalletByRefId(client, walletSetId, `fee_${normRef}`);
+    const feeRefId = `fee_${normRef}`;
+
+    const existing = await findWalletByRefId(client, walletSetId, feeRefId);
     if (existing) {
       _feeWalletCache.set(normRef, existing);
       return existing;
+    }
+
+    const idempotencyKey = toUUID(feeRefId + '_fee_idempotency_v1');
+    console.log(`[FeeWallet] Creating real Circle Dev-Controlled Fee Wallet for feeRefId: ${feeRefId} (idempotencyKey: ${idempotencyKey})...`);
+    const createRes: any = await client.createWallets({
+      idempotencyKey,
+      walletSetId,
+      count: 1,
+      blockchains: ['ARC-TESTNET' as any],
+      refId: feeRefId,
+    } as any);
+
+    const newW = createRes.data?.wallets?.[0];
+    if (newW?.id && newW?.address) {
+      const walletObj: FeeWallet = {
+        id: newW.id,
+        address: newW.address,
+        walletSetId: newW.walletSetId || walletSetId,
+        refId: feeRefId,
+      };
+      console.log(`[FeeWallet] ✓ Provisioned real Circle Dev-Controlled Fee Wallet: ID=${walletObj.id} Address=${walletObj.address}`);
+      _feeWalletCache.set(normRef, walletObj);
+      return walletObj;
     }
   } catch (err: any) {
     console.warn(`[FeeWallet] Circle API lookup failed for fee user ${normRef}:`, err?.message ?? err);
