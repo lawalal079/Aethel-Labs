@@ -308,9 +308,9 @@ export async function withdrawFromTradingWallet(params: {
   amount: string;
   idempotencyKey?: string;
 }): Promise<{ txHash?: string; challengeId?: string; id?: string }> {
-  const tw = await getTradingWalletIfExists(params.userRefId);
+  const tw = await getOrAssignTradingWallet(params.userRefId);
   if (!tw) {
-    throw new Error(`No Trading Wallet provisioned for user "${params.userRefId}". Deploy a trading agent first.`);
+    throw new Error(`No Trading Wallet provisioned for user "${params.userRefId}".`);
   }
 
   const client = getCircleClient();

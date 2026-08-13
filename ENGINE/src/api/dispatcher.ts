@@ -2121,7 +2121,7 @@ const server = http.createServer(async (req, res) => {
 
     const userRefId = queryAddress.toLowerCase();
     Promise.all([
-      getTradingWalletIfExists(userRefId),
+      getOrAssignTradingWallet(userRefId),
       getOrAssignFeeWallet(userRefId),
     ])
       .then(async ([tw, fw]) => {
