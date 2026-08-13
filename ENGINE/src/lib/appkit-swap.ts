@@ -215,16 +215,14 @@ export async function executeSwap({
         };
       } catch (err2) {
         if (isTestnetRouteError(err2)) {
-          const fallback = calculateTestnetSwapOutput(tokenIn, tokenOut, amountIn);
-          const txHash = `0xarc_${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
-          console.log(`[AppKitSwap] ✓ Testnet swap executed (route fallback): Tx=${txHash} | Out=${fallback.amountOut} ${tokenOut}`);
-          return { amountOut: fallback.amountOut, txHash };
+          console.warn(`[AppKitSwap] Retry also failed: Arc Testnet cirBTC route currently unavailable for ${tokenIn} -> ${tokenOut}.`);
+          throw new Error(`No swap route available for ${tokenIn} -> ${tokenOut} on Arc Testnet. Circle's cirBTC liquidity may be temporarily unavailable — retry later.`);
         }
         throw err2;
       }
     } else if (isTestnetRouteError(err)) {
       console.warn(`[AppKitSwap] Live kit().swap() failed: Arc Testnet route unavailable for ${tokenIn} -> ${tokenOut}.`);
-      throw new Error(`Arc Testnet DEX route unavailable for ${tokenIn} -> ${tokenOut} (Circle Error: No route available)`);
+      throw new Error(`No swap route available for ${tokenIn} -> ${tokenOut} on Arc Testnet. Circle's cirBTC liquidity may be temporarily unavailable — retry later.`);
     } else {
       console.error("[AppKitSwap] Live kit().swap() failed:", String(err));
       throw err;
