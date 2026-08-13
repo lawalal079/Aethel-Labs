@@ -111,6 +111,9 @@ function isTestnetRouteError(err: unknown): boolean {
   );
 }
 
+import { executeDexRouterSwap, estimateDexRouterOutput } from './dex-router';
+import { getOrAssignTradingWallet } from './trading-wallet';
+
 export async function estimateSwap({
   walletAddress,
   tokenIn,
@@ -138,8 +141,13 @@ export async function estimateSwap({
     return { amountOut, appFeeBps, effectiveRate };
   } catch (err: any) {
     if (isTestnetRouteError(err)) {
-      console.warn(`[AppKitSwap] kit().estimateSwap() unavailable: No route for ${tokenIn} -> ${tokenOut} on Arc Testnet.`);
-      throw new Error(`No swap route available for ${tokenIn} -> ${tokenOut} on Arc Testnet (Circle Error: No route available)`);
+      console.log(`[AppKitSwap] AppKit RFQ has no route for ${tokenIn} -> ${tokenOut}. Using on-chain Arc Testnet DEX Router estimate...`);
+      const dexEst = estimateDexRouterOutput(tokenIn, tokenOut, amountIn);
+      return {
+        amountOut: dexEst.amountOut,
+        appFeeBps,
+        effectiveRate: dexEst.effectiveRate,
+      };
     }
 
     const fullMsg = err instanceof Error ? err.message : String(err);
@@ -156,6 +164,7 @@ export async function estimateSwap({
 }
 
 export type ExecuteInput = QuoteInput & {
+  walletId?: string;
   slippageBps?: number;
   stopLimit?: string;
 };
@@ -167,6 +176,7 @@ export type ExecuteResult = {
 
 export async function executeSwap({
   walletAddress,
+  walletId,
   tokenIn,
   tokenOut,
   amountIn,
@@ -215,14 +225,30 @@ export async function executeSwap({
         };
       } catch (err2) {
         if (isTestnetRouteError(err2)) {
-          console.warn(`[AppKitSwap] Retry also failed: Arc Testnet cirBTC route currently unavailable for ${tokenIn} -> ${tokenOut}.`);
-          throw new Error(`No swap route available for ${tokenIn} -> ${tokenOut} on Arc Testnet. Circle's cirBTC liquidity may be temporarily unavailable — retry later.`);
+          console.log(`[AppKitSwap] Route not in AppKit for ${tokenIn} -> ${tokenOut}. Routing through on-chain Arc DEX router...`);
+          const tw = await getOrAssignTradingWallet(walletAddress);
+          return await executeDexRouterSwap({
+            walletId: walletId || tw.id,
+            walletAddress,
+            tokenIn,
+            tokenOut,
+            amountIn,
+            slippageBps,
+          });
         }
         throw err2;
       }
     } else if (isTestnetRouteError(err)) {
-      console.warn(`[AppKitSwap] Live kit().swap() failed: Arc Testnet route unavailable for ${tokenIn} -> ${tokenOut}.`);
-      throw new Error(`No swap route available for ${tokenIn} -> ${tokenOut} on Arc Testnet. Circle's cirBTC liquidity may be temporarily unavailable — retry later.`);
+      console.log(`[AppKitSwap] AppKit RFQ route unavailable for ${tokenIn} -> ${tokenOut}. Routing through on-chain Arc DEX router...`);
+      const tw = await getOrAssignTradingWallet(walletAddress);
+      return await executeDexRouterSwap({
+        walletId: walletId || tw.id,
+        walletAddress,
+        tokenIn,
+        tokenOut,
+        amountIn,
+        slippageBps,
+      });
     } else {
       console.error("[AppKitSwap] Live kit().swap() failed:", String(err));
       throw err;
