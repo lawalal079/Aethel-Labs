@@ -155,12 +155,12 @@ function buildSMCPrompt(ctx: SMCContext): string {
 
   const htfBlock = htfCount > 0
     ? `HIGHER TIMEFRAME (1-HOUR BARS — MARKET STRUCTURE, ORDERBLOCKS & BREAKER BLOCKS):
-${formatCandlesForPrompt(ctx.candles1H!, 30)}`
+${formatCandlesForPrompt(ctx.candles1H!, 15)}`
     : `HTF DATA: Not available`;
 
   const ltfBlock = ltfCount > 0
     ? `LOWER TIMEFRAME (15-MIN BARS — ENTRY TIMING & FVG / SWEEPS):
-${formatCandlesForPrompt(ctx.candles, 40)}
+${formatCandlesForPrompt(ctx.candles, 20)}
 
 LATEST CLOSE: $${ctx.candles.at(-1)?.close ?? ctx.currentPrice}
 LIVE SPOT:    $${ctx.currentPrice}`

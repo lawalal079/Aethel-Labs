@@ -19,6 +19,7 @@ export interface SharedDecision extends SMCDecision {
   price: number;
   pricePairLabel: string;
   agentId: string;
+  isFallback?: boolean;
 }
 
 // ── In-Memory Store & State ───────────────────────────────────────────────────
@@ -154,18 +155,19 @@ export async function runMarketAnalystCycle(agentId: string = 'smc_alpha_executo
     return shared;
   } catch (err) {
     const errMsg = (err as Error).message;
-    console.warn(`[Market Analyst] Error during Gemini evaluation: ${errMsg} — storing fallback HOLD decision.`);
+    console.warn(`[Market Analyst] Error during Gemini evaluation: ${errMsg} — storing temporary 30s fallback HOLD decision.`);
     const fallbackShared: SharedDecision = {
       action: 'HOLD',
       fromToken: 'USDC',
       toToken: 'USDC',
       amountIn: '0.00',
       patternDetected: 'None',
-      reasoning: `Market Analyst fallback due to error: ${errMsg}`,
+      reasoning: `Gemini API fallback — holding position safely (${errMsg.slice(0, 80)}).`,
       timestamp: Date.now(),
       price: validBtcUsd,
       pricePairLabel: 'BTC/USD',
       agentId: canonicalId,
+      isFallback: true,
     };
     _sharedDecisionStore.set(canonicalId, fallbackShared);
     return fallbackShared;
@@ -190,8 +192,11 @@ export function getLatestSharedDecision(
   }
 
   const age = Date.now() - stored.timestamp;
-  if (age > maxAgeMs) {
-    console.warn(`[Market Analyst] Decision for "${canonicalId}" is stale (${Math.round(age / 1000)}s > ${Math.round(maxAgeMs / 1000)}s max).`);
+  // Fallback decisions expire in 30s so the daemon re-evaluates Gemini quickly instead of getting stuck for 5-12 min
+  const effectiveMaxAge = stored.isFallback || stored.reasoning?.includes('fallback') ? 30_000 : maxAgeMs;
+
+  if (age > effectiveMaxAge) {
+    console.warn(`[Market Analyst] Decision for "${canonicalId}" is ${stored.isFallback ? 'fallback & expired' : 'stale'} (${Math.round(age / 1000)}s > ${Math.round(effectiveMaxAge / 1000)}s max).`);
     return null;
   }
 
