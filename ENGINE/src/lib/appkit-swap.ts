@@ -111,7 +111,7 @@ function isTestnetRouteError(err: unknown): boolean {
   );
 }
 
-import { executeDexRouterSwap, estimateDexRouterOutput } from './dex-router';
+import { executeDexRouterSwap, getLiveDexQuote } from './dex-router';
 import { getOrAssignTradingWallet } from './trading-wallet';
 
 export async function estimateSwap({
@@ -141,8 +141,8 @@ export async function estimateSwap({
     return { amountOut, appFeeBps, effectiveRate };
   } catch (err: any) {
     if (isTestnetRouteError(err)) {
-      console.log(`[AppKitSwap] AppKit RFQ has no route for ${tokenIn} -> ${tokenOut}. Using on-chain Arc Testnet DEX Router estimate...`);
-      const dexEst = estimateDexRouterOutput(tokenIn, tokenOut, amountIn);
+      console.log(`[AppKitSwap] AppKit RFQ has no route for ${tokenIn} -> ${tokenOut}. Using live on-chain Arc Testnet DEX Router estimate...`);
+      const dexEst = await getLiveDexQuote(tokenIn, tokenOut, amountIn);
       return {
         amountOut: dexEst.amountOut,
         appFeeBps,
