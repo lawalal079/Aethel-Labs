@@ -350,6 +350,7 @@ export default function MyAgents() {
                             <ArrowRight size={12} weight="bold" />
                           </button>
                         </>
+                      ) : (
                       <button
                         onClick={() => {
                           setSelectedAgentForDeploy(agent);
