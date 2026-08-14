@@ -106,7 +106,7 @@ export default function MyAgents() {
   const {
     agents, deployedAgentIds, daemonStatus, isDeployingDaemon,
     startDaemonForAgent, stopDaemonForAgent, refreshDaemonStatus,
-    setActiveTab, setSelectedAgentForDeploy,
+    setActiveTab, setSelectedAgentForDeploy, spendingBalance,
   } = useApp();
 
   const [isActionLoading, setIsActionLoading] = useState<string | null>(null);
@@ -300,55 +300,68 @@ export default function MyAgents() {
                   )}
                 </div>
 
-                {/* Card Footer Controls */}
-                <div className="flex items-center gap-3 pt-4 border-t border-[#2A2F35]">
-                  {isTradingAgent ? (
-                    <>
-                      {isDaemonRunning ? (
+                  {/* Card Footer Controls */}
+                  <div className="flex flex-col gap-2 pt-4 border-t border-[#2A2F35]">
+                    {isTradingAgent && !isDaemonRunning && parseFloat(spendingBalance || '0') <= 0 && (
+                      <div className="flex items-center justify-between px-3 py-2 bg-amber-950/20 border border-amber-900/30 rounded-lg text-[11px] text-amber-300">
+                        <span>⚠️ Gateway empty ($0.00) — Required to run</span>
                         <button
-                          id={`stop-daemon-${agent.id}`}
-                          disabled={isLoading}
-                          onClick={() => void handleToggleDaemon(agent.id, true)}
-                          className="flex-1 py-2.5 bg-rose-950/20 border border-rose-900/40 hover:border-rose-600 text-rose-400 hover:text-rose-300 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                          onClick={() => setActiveTab('billing')}
+                          className="text-[#4E8981] hover:underline font-bold ml-2 cursor-pointer"
                         >
-                          {isLoading ? <Spinner size={14} className="animate-spin" /> : <Stop size={14} weight="fill" />}
-                          <span>Stop Daemon</span>
+                          Deposit →
                         </button>
-                      ) : (
-                        <button
-                          id={`start-daemon-${agent.id}`}
-                          disabled={isLoading}
-                          onClick={() => void handleToggleDaemon(agent.id, false)}
-                          className="flex-1 py-2.5 bg-[#4E8981] hover:bg-[#4E8981]/90 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-lg active:scale-95 disabled:opacity-50"
-                        >
-                          {isLoading ? <Spinner size={14} className="animate-spin" /> : <Play size={14} weight="fill" />}
-                          <span>Start Daemon</span>
-                        </button>
-                      )}
+                      </div>
+                    )}
 
+                    <div className="flex items-center gap-3">
+                      {isTradingAgent ? (
+                        <>
+                          {isDaemonRunning ? (
+                            <button
+                              id={`stop-daemon-${agent.id}`}
+                              disabled={isLoading}
+                              onClick={() => void handleToggleDaemon(agent.id, true)}
+                              className="flex-1 py-2.5 bg-rose-950/20 border border-rose-900/40 hover:border-rose-600 text-rose-400 hover:text-rose-300 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                            >
+                              {isLoading ? <Spinner size={14} className="animate-spin" /> : <Stop size={14} weight="fill" />}
+                              <span>Stop Agent</span>
+                            </button>
+                          ) : (
+                            <button
+                              id={`start-daemon-${agent.id}`}
+                              disabled={isLoading}
+                              onClick={() => void handleToggleDaemon(agent.id, false)}
+                              className="flex-1 py-2.5 bg-[#4E8981] hover:bg-[#4E8981]/90 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-lg active:scale-95 disabled:opacity-50"
+                            >
+                              {isLoading ? <Spinner size={14} className="animate-spin" /> : <Play size={14} weight="fill" />}
+                              <span>Start Agent</span>
+                            </button>
+                          )}
+
+                          <button
+                            onClick={() => {
+                              setSelectedAgentForDeploy(agent);
+                              setActiveTab('workflows');
+                            }}
+                            className="flex-1 py-2.5 bg-transparent border border-[#2A2F35] hover:border-[#4E8981]/50 text-[#8a8f98] hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <span>Execute Mission</span>
+                            <ArrowRight size={12} weight="bold" />
+                          </button>
+                        </>
                       <button
                         onClick={() => {
                           setSelectedAgentForDeploy(agent);
                           setActiveTab('workflows');
                         }}
-                        className="flex-1 py-2.5 bg-transparent border border-[#2A2F35] hover:border-[#4E8981]/50 text-[#8a8f98] hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                        className="w-full py-3 bg-[#4E8981] hover:bg-[#4E8981]/90 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg active:scale-95"
                       >
                         <span>Execute Mission</span>
-                        <ArrowRight size={12} weight="bold" />
+                        <ArrowRight size={14} weight="bold" />
                       </button>
-                    </>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        setSelectedAgentForDeploy(agent);
-                        setActiveTab('workflows');
-                      }}
-                      className="w-full py-3 bg-[#4E8981] hover:bg-[#4E8981]/90 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg active:scale-95"
-                    >
-                      <span>Execute Mission</span>
-                      <ArrowRight size={14} weight="bold" />
-                    </button>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
             );
