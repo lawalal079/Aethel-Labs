@@ -2027,6 +2027,46 @@ const server = http.createServer(async (req, res) => {
         }
 
 
+        // 4b. Verify Gateway Spending Balance — block execution if unfunded
+        console.log(`[deploy-step-4b] Checking Gateway balance for ${verifiedAddress}...`);
+        const GATEWAY_ADDR = (process.env.GATEWAY_ADDRESS || '0x0077777d7EBA4688BDeF3E311b846F25870A19B9') as Address;
+        const USDC_ADDR = (process.env.USDC_ADDRESS || '0x3600000000000000000000000000000000000000') as Address;
+        const GW_ABI = parseAbi(['function availableBalance(address, address) view returns (uint256)']);
+        
+        let hasGatewayFunds = false;
+        try {
+          const userGwBal = await publicClient.readContract({
+            address: GATEWAY_ADDR,
+            abi: GW_ABI,
+            functionName: 'availableBalance',
+            args: [USDC_ADDR, verifiedAddress as Address],
+          }) as bigint;
+          if (userGwBal > 0n) {
+            hasGatewayFunds = true;
+          } else {
+            // Also check fee wallet as fallback
+            const fwGwBal = await publicClient.readContract({
+              address: GATEWAY_ADDR,
+              abi: GW_ABI,
+              functionName: 'availableBalance',
+              args: [USDC_ADDR, feeWallet.address as Address],
+            }) as bigint;
+            if (fwGwBal > 0n) hasGatewayFunds = true;
+          }
+        } catch (gwErr: any) {
+          console.warn('[deploy-step-4b-warn] Gateway balance query warning:', gwErr.message);
+        }
+
+        if (!hasGatewayFunds) {
+          console.log(`[deploy-step-4b-reject] Deployment rejected: Gateway balance is 0 for ${verifiedAddress}`);
+          res.writeHead(402);
+          res.end(JSON.stringify({
+            success: false,
+            error: 'INSUFFICIENT_GATEWAY_BALANCE: Gateway Spending balance is 0.00 USDC. Please deposit funds on the Billing page to activate autonomous agent execution.',
+          }));
+          return;
+        }
+
         // 5. Start (or no-op if already running) the daemon loop
         console.log(`[deploy-step-5] Starting daemon loop...`);
         const interval = (intervalSeconds && intervalSeconds > 0) ? intervalSeconds : 300;

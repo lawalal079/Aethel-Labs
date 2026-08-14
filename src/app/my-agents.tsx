@@ -301,30 +301,43 @@ export default function MyAgents() {
                 </div>
 
                 {/* Card Footer Controls */}
-                <div className="flex items-center gap-3 pt-4 border-t border-[#2A2F35]">
-                  {isTradingAgent ? (
-                    <>
-                          {isDaemonRunning ? (
-                            <button
-                              id={`stop-daemon-${agent.id}`}
-                              disabled={isLoading}
-                              onClick={() => void handleToggleDaemon(agent.id, true)}
-                              className="flex-1 py-2.5 bg-rose-950/20 border border-rose-900/40 hover:border-rose-600 text-rose-400 hover:text-rose-300 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
-                            >
-                              {isLoading ? <Spinner size={14} className="animate-spin" /> : <Stop size={14} weight="fill" />}
-                              <span>Stop Agent</span>
-                            </button>
-                          ) : (
-                            <button
-                              id={`start-daemon-${agent.id}`}
-                              disabled={isLoading}
-                              onClick={() => void handleToggleDaemon(agent.id, false)}
-                              className="flex-1 py-2.5 bg-[#4E8981] hover:bg-[#4E8981]/90 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-lg active:scale-95 disabled:opacity-50"
-                            >
-                              {isLoading ? <Spinner size={14} className="animate-spin" /> : <Play size={14} weight="fill" />}
-                              <span>Start Agent</span>
-                            </button>
-                          )}
+                <div className="flex flex-col gap-2 pt-4 border-t border-[#2A2F35]">
+                  {isTradingAgent && !isDaemonRunning && parseFloat(spendingBalance || '0') <= 0 && (
+                    <div className="flex items-center justify-between px-3 py-2 bg-amber-950/20 border border-amber-900/30 rounded-lg text-[11px] text-amber-300">
+                      <span>⚠️ Gateway balance is $0.00 — Deposit in Billing to run</span>
+                      <button
+                        onClick={() => setActiveTab('billing')}
+                        className="text-[#4E8981] hover:underline font-bold ml-2 cursor-pointer"
+                      >
+                        Deposit →
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-3">
+                    {isTradingAgent ? (
+                      <>
+                        {isDaemonRunning ? (
+                          <button
+                            id={`stop-daemon-${agent.id}`}
+                            disabled={isLoading}
+                            onClick={() => void handleToggleDaemon(agent.id, true)}
+                            className="flex-1 py-2.5 bg-rose-950/20 border border-rose-900/40 hover:border-rose-600 text-rose-400 hover:text-rose-300 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                          >
+                            {isLoading ? <Spinner size={14} className="animate-spin" /> : <Stop size={14} weight="fill" />}
+                            <span>Stop Agent</span>
+                          </button>
+                        ) : (
+                          <button
+                            id={`start-daemon-${agent.id}`}
+                            disabled={isLoading}
+                            onClick={() => void handleToggleDaemon(agent.id, false)}
+                            className="flex-1 py-2.5 bg-[#4E8981] hover:bg-[#4E8981]/90 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-lg active:scale-95 disabled:opacity-50"
+                          >
+                            {isLoading ? <Spinner size={14} className="animate-spin" /> : <Play size={14} weight="fill" />}
+                            <span>Start Agent</span>
+                          </button>
+                        )}
 
                           <button
                             onClick={() => {
@@ -351,7 +364,8 @@ export default function MyAgents() {
                     )}
                   </div>
                 </div>
-              );
+              </div>
+            );
           })}
         </div>
       )}

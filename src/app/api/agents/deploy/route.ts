@@ -98,6 +98,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ── Layer 1b: On-chain Gateway Spending Balance check ────────────────────
+    const GATEWAY_ADDR = (process.env.GATEWAY_ADDRESS || '0x0077777d7EBA4688BDeF3E311b846F25870A19B9') as Address;
+    const USDC_ADDR = (process.env.USDC_ADDRESS || '0x3600000000000000000000000000000000000000') as Address;
+    const GW_ABI = parseAbi(['function availableBalance(address, address) view returns (uint256)']);
+    
+    let gwBalance = 0n;
+    try {
+      gwBalance = await _publicClient.readContract({
+        address: GATEWAY_ADDR,
+        abi: GW_ABI,
+        functionName: 'availableBalance',
+        args: [USDC_ADDR, userAddress as Address],
+      }) as bigint;
+      console.log(`[fe-deploy-gw] Gateway balance for ${userAddress}: ${gwBalance} atomic units`);
+    } catch (err: any) {
+      console.warn('[fe-deploy-gw-warn] Gateway balance read error:', err.message);
+    }
+
+    if (gwBalance === 0n) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'INSUFFICIENT_GATEWAY_BALANCE: Your Gateway Spending balance is 0.00 USDC. Please deposit funds on the Billing page to activate autonomous agent execution.',
+        },
+        { status: 402 }
+      );
+    }
+
     // ── Layer 2: Forward to ENGINE with original Authorization header ──────────
     const authHeader = request.headers.get('Authorization') ?? request.headers.get('authorization');
     if (!authHeader) {
