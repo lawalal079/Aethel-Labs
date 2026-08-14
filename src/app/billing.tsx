@@ -59,7 +59,7 @@ const USDCIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
 );
 
 export default function Billing() {
-  const { executionLogs } = useApp();
+  const { executionLogs, daemonStatus } = useApp();
   const circle = useCircleWallet();
 
   const [filterQuery, setFilterQuery] = useState('');
@@ -583,8 +583,8 @@ export default function Billing() {
   yesterdayDate.setDate(yesterdayDate.getDate() - 1);
   const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
 
-  let todaySpend = 0;
-  let yesterdaySpend = 0;
+  let todayLogsSpend = 0;
+  let yesterdayLogsSpend = 0;
 
   (executionLogs ?? []).forEach(log => {
     if (log.tx_type === 'Nanopayment' || (log.cost_usdc && log.cost_usdc > 0)) {
@@ -593,9 +593,9 @@ export default function Billing() {
         if (isNaN(parsed.getTime())) return;
         const logDate = parsed.toISOString().split('T')[0];
         if (logDate === todayStr) {
-          todaySpend += Math.abs(log.cost_usdc);
+          todayLogsSpend += Math.abs(log.cost_usdc);
         } else if (logDate === yesterdayStr) {
-          yesterdaySpend += Math.abs(log.cost_usdc);
+          yesterdayLogsSpend += Math.abs(log.cost_usdc);
         }
       } catch {
         // Skip entries with unparseable timestamps
@@ -603,10 +603,16 @@ export default function Billing() {
     }
   });
 
+  const isDaemonRunning = Boolean(daemonStatus?.running);
+  const daemonInterval = daemonStatus?.intervalSeconds || 60;
+  const activeDailyBurn = isDaemonRunning ? (86400 / daemonInterval) * 0.0001 : 0;
+  const daemonCycleSpendToday = (daemonStatus?.cycleCount || 0) * 0.0001;
+  const todaySpend = isDaemonRunning ? Math.max(activeDailyBurn, daemonCycleSpendToday + todayLogsSpend) : (daemonCycleSpendToday + todayLogsSpend);
+
   let dodChange = 0;
   let isIncrease = true;
-  if (yesterdaySpend > 0) {
-    dodChange = ((todaySpend - yesterdaySpend) / yesterdaySpend) * 100;
+  if (yesterdayLogsSpend > 0) {
+    dodChange = ((todaySpend - yesterdayLogsSpend) / yesterdayLogsSpend) * 100;
     isIncrease = dodChange >= 0;
   } else if (todaySpend > 0) {
     dodChange = 100;
@@ -614,7 +620,21 @@ export default function Billing() {
   }
 
   const currentGatewayBal = parseFloat(gatewayBalance || '0');
-  const depletionDays = todaySpend > 0 ? Math.round(currentGatewayBal / todaySpend) : '∞';
+  const availableCycles = Math.floor(currentGatewayBal / 0.0001);
+  let depletionText = `${availableCycles} cycles`;
+  if (isDaemonRunning && activeDailyBurn > 0 && currentGatewayBal > 0) {
+    const days = currentGatewayBal / activeDailyBurn;
+    if (days < 1) {
+      const hours = (days * 24).toFixed(1);
+      depletionText = `${hours} hours (~${availableCycles} cycles)`;
+    } else {
+      depletionText = `${days.toFixed(1)} days (~${availableCycles} cycles)`;
+    }
+  } else if (currentGatewayBal > 0) {
+    depletionText = `~${availableCycles} cycles available`;
+  } else {
+    depletionText = '0 cycles (depleted)';
+  }
 
   return (
     <div className="space-y-8">
@@ -757,7 +777,7 @@ export default function Billing() {
                   <div className="bg-[#4E8981] h-full rounded-full" style={{ width: `${Math.min(100, Math.max(10, todaySpend * 500))}%` }} />
                 </div>
                 <p className="text-[11px] text-[#8a8f98] leading-relaxed">
-                  Based on current agent throughput, your balance will last approx. <span className="text-white font-semibold">{depletionDays} {typeof depletionDays === 'number' ? 'days' : ''}</span>.
+                  Based on current agent throughput, your balance will last approx. <span className="text-white font-semibold">{depletionText}</span>.
                 </p>
               </div>
             </div>
