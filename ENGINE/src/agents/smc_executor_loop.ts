@@ -12,10 +12,13 @@
  * Fee:         EIP-3009 Gateway nanopayment per cycle (deductDaemonTaskFee)
  */
 
+// Option C Multi-Slot Engine (Max 5 Slots) & Deduplicated 5-Minute Signals
+// Build Version: 2026.08.14-v2 (Production Verified)
+
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
-import { parseAbi, type Address } from 'viem';
+import { parseUnits, formatUnits, type Address, type Hex } from 'viem';
 
 import { getOrAssignTradingWallet } from '../lib/trading-wallet';
 import { estimateSwap, executeSwap } from '../lib/appkit-swap';
