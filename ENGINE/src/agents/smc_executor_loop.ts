@@ -348,12 +348,116 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
   const currentPrice = decision.price ?? 64000;
   const activePosition = getPosition(userRefId);
 
+  // Sync position amount with real on-chain balance
+  const onChainCirBTCAmount = (Number(rawCirBTC) / 1e8).toFixed(8);
+
+  // ── 4b. TP/SL Exit Trigger ──────────────────────────────────────────────
+  // If we hold a position, check if the live price has breached SL or TP.
+  // If triggered, execute an immediate full exit swap (cirBTC → USDC) and return.
+
+  if (activePosition && activePosition.heldAsset !== 'USDC') {
+    const { slPrice, tpPrice, entryPrice } = activePosition;
+    const realHeldAmount = onChainCirBTCAmount;
+    const realHeldNum = parseFloat(realHeldAmount);
+
+    console.log(
+      `[Position Guard] Active: ${realHeldAmount} ${activePosition.heldAsset} | ` +
+      `Entry: $${entryPrice} | SL: $${slPrice ?? 'N/A'} | TP: $${tpPrice ?? 'N/A'} | ` +
+      `Spot: $${currentPrice}`
+    );
+
+    const slTriggered = typeof slPrice === 'number' && currentPrice <= slPrice;
+    const tpTriggered = typeof tpPrice === 'number' && currentPrice >= tpPrice;
+
+    if ((slTriggered || tpTriggered) && realHeldNum > 0) {
+      const exitReason = slTriggered ? 'STOP LOSS' : 'TAKE PROFIT';
+      const pnlPct = entryPrice > 0 ? (((currentPrice - entryPrice) / entryPrice) * 100).toFixed(2) : '0';
+      console.log(`\n🚨 [${exitReason} TRIGGERED] Price $${currentPrice} ${slTriggered ? '<=' : '>='} $${slTriggered ? slPrice : tpPrice} — Exiting position...`);
+      console.log(`[${exitReason}] PnL: ${pnlPct}% | Selling ${realHeldAmount} ${activePosition.heldAsset} → USDC`);
+
+      try {
+        const exitResult = await executeSwap({
+          walletAddress: tradingWalletAddress,
+          walletId,
+          tokenIn: activePosition.heldAsset as 'cirBTC' | 'EURC',
+          tokenOut: 'USDC',
+          amountIn: realHeldAmount,
+          slippageBps: 200,
+        });
+
+        clearPosition(userRefId);
+        console.log(`[${exitReason}] ✓ Exit swap executed! Tx: ${exitResult.txHash} | Out: ${exitResult.amountOut} USDC`);
+
+        writeAuditLog({
+          cycle: cycleCount, userRefId, tradingWalletAddress, walletId,
+          priceFeedPair: decision.pricePairLabel || 'BTC/USD', currentPrice, balances,
+          activePosition: { ...activePosition, amount: realHeldAmount },
+          patternDetected: exitReason, signal: `EXIT_${exitReason.replace(' ', '_')}`,
+          reasoning: `${exitReason}: Price $${currentPrice} breached $${slTriggered ? slPrice : tpPrice}. PnL: ${pnlPct}%`,
+          taskFeeSettled: taskFee.settled, taskFeeDisplay: taskFee.feeDisplay, taskFeeError: taskFee.error ?? null,
+          policyAllowed: true, policyReason: '', executed: true,
+          swapFrom: activePosition.heldAsset, swapTo: 'USDC', amountIn: realHeldAmount,
+          amountOut: exitResult.amountOut ?? 'N/A', txHash: exitResult.txHash ?? null, executionError: null,
+        });
+
+        return {
+          swapAttempted: true, swapSucceeded: true,
+          swapDirection: `${activePosition.heldAsset} → USDC (${exitReason})`,
+          amountIn: realHeldAmount, amountOut: exitResult.amountOut,
+          txHash: exitResult.txHash, timestamp: Date.now(),
+        };
+      } catch (exitErr) {
+        const exitErrMsg = (exitErr as Error).message;
+        console.error(`[${exitReason}] ✗ Exit swap failed: ${exitErrMsg}`);
+        return {
+          swapAttempted: true, swapSucceeded: false,
+          swapDirection: `${activePosition.heldAsset} → USDC (${exitReason})`,
+          error: exitErrMsg, timestamp: Date.now(),
+        };
+      }
+    }
+  }
+
   // ── 5. Layer 2: Spend Policy Gate ────────────────────────────────────────
   let amountAtomic = 0n;
   let policyAllowed = true;
   let policyReason = '';
 
   if (decision.action === 'SWAP') {
+    const fromToken = decision.fromToken as string;
+    const toToken = decision.toToken as string;
+
+    // ── Position Guard: Block new BUY if already holding the target asset ──
+    if (fromToken === 'USDC' && toToken !== 'USDC') {
+      const existingPos = getPosition(userRefId);
+      const onChainHeld = parseFloat(onChainCirBTCAmount);
+      if (existingPos && existingPos.heldAsset === toToken && onChainHeld > 0) {
+        console.log(
+          `\n🛡️ [Position Guard] BLOCKING new BUY: Already holding ${onChainCirBTCAmount} ${toToken} ` +
+          `(Entry: $${existingPos.entryPrice} | TP: $${existingPos.tpPrice} | SL: $${existingPos.slPrice}). ` +
+          `Waiting for TP/SL exit before opening new position.`
+        );
+
+        writeAuditLog({
+          cycle: cycleCount, userRefId, tradingWalletAddress, walletId,
+          priceFeedPair: decision.pricePairLabel || 'BTC/USD', currentPrice, balances,
+          activePosition: { ...existingPos, amount: onChainCirBTCAmount },
+          patternDetected: decision.patternDetected, signal: 'BLOCKED_BY_POSITION_GUARD',
+          reasoning: `Position guard: already holding ${onChainCirBTCAmount} ${toToken}. Awaiting TP ($${existingPos.tpPrice}) or SL ($${existingPos.slPrice}).`,
+          taskFeeSettled: taskFee.settled, taskFeeDisplay: taskFee.feeDisplay, taskFeeError: taskFee.error ?? null,
+          policyAllowed: false, policyReason: 'Position Guard: max 1 open position per asset',
+          executed: false, swapFrom: fromToken, swapTo: toToken, amountIn: decision.amountIn,
+          amountOut: 'N/A', txHash: null, executionError: null,
+        });
+
+        return {
+          swapAttempted: false, swapSucceeded: false,
+          policyRejection: `Position Guard: already holding ${onChainCirBTCAmount} ${toToken}`,
+          timestamp: Date.now(),
+        };
+      }
+    }
+
     // Position Sizing: 5% of Trading Wallet USDC Balance (min $1.00 USDC)
     if (decision.fromToken === 'USDC') {
       const TRADE_ALLOCATION_PCT = 0.05;
@@ -428,7 +532,7 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
         slippageBps: 75,
       });
 
-      txHash = execResult.txHash ?? `0xsim_${Date.now().toString(16)}`;
+      txHash = execResult.txHash;
       amountOut = execResult.amountOut ?? amountOut;
       executed = true;
 
@@ -442,6 +546,17 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
 
       // ── Update position store ───────────────────────────────────────────
       if (toToken !== 'USDC') {
+        // Re-read on-chain balance after swap to get real total held amount
+        let totalHeldAmount: string;
+        try {
+          await new Promise(r => setTimeout(r, 2000)); // Brief wait for chain state
+          const freshRawBal = await readTokenBalance(CIRBTC_ADDRESS, tradingWalletAddress as Address);
+          totalHeldAmount = (Number(freshRawBal) / 1e8).toFixed(8);
+          console.log(`[SMC] Post-swap on-chain ${toToken} balance: ${totalHeldAmount}`);
+        } catch {
+          totalHeldAmount = amountOut ?? decision.amountIn;
+        }
+
         // Structure-Based SL: Gemini decision.patternLow (exact pattern candle low) > candle window fallback > 0.995 fallback
         const windowLow = currentPrice * 0.995;
 
@@ -462,7 +577,7 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
         savePosition(userRefId, {
           heldAsset: toToken,
           entryPrice: currentPrice,
-          amount: amountOut ?? decision.amountIn,
+          amount: totalHeldAmount,
           enteredAt: Date.now(),
           tpPrice,
           slPrice,
@@ -470,7 +585,7 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
 
         console.log(`[SMC] Pattern Boundaries — Gemini Pattern Low: ${decision.patternLow ?? 'N/A'}, High: ${decision.patternHigh ?? 'N/A'}`);
         console.log(`[SMC] Structure Risk Parameters — Entry: $${currentPrice} | SL (Pattern Low): $${slPrice} (Risk: $${riskDistance.toFixed(2)}) | TP (1:2 R:R): $${tpPrice}`);
-        console.log(`[SMC] Position saved: ${amountOut ?? decision.amountIn} ${toToken} @ ${currentPrice} (TP: ${tpPrice}, SL: ${slPrice})`);
+        console.log(`[SMC] Position saved: ${totalHeldAmount} ${toToken} @ ${currentPrice} (TP: ${tpPrice}, SL: ${slPrice})`);
       } else {
         clearPosition(userRefId);
         console.log(`[SMC] Position cleared (exit to USDC)`);
