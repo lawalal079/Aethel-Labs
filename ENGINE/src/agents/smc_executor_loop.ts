@@ -21,7 +21,16 @@ import { getOrAssignTradingWallet } from '../lib/trading-wallet';
 import { estimateSwap, executeSwap } from '../lib/appkit-swap';
 import { checkSpendPolicy, recordSpend } from '../lib/spend-limit-policy';
 import { publicClient, USDC_ADDRESS, deductDaemonTaskFee } from '../lib/payment-utils';
-import { getPosition, savePosition, clearPosition } from '../lib/position-store';
+import {
+  getPosition,
+  savePosition,
+  clearPosition,
+  getPositionSlots,
+  getPositionSummary,
+  addPositionSlot,
+  MAX_POSITION_SLOTS,
+  type PositionSlot,
+} from '../lib/position-store';
 import { type SupportedToken } from '../reasoning/smc';
 import { type OHLCCandle } from '../lib/ohlc-feed';
 import {
@@ -351,64 +360,81 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
   );
 
   const currentPrice = decision.price ?? 64000;
-  const activePosition = getPosition(userRefId);
-
-  // Sync position amount with real on-chain balance
   const onChainCirBTCAmount = (Number(rawCirBTC) / 1e8).toFixed(8);
+  const onChainCirBTCHeld = parseFloat(onChainCirBTCAmount);
 
-  // ── 4b. TP/SL Exit Trigger ──────────────────────────────────────────────
-  // If we hold a position, check if the live price has breached SL or TP.
-  // If triggered, execute an immediate full exit swap (cirBTC → USDC) and return.
+  // ── 4b. Option C Position Summary & Display ─────────────────────────────
+  const posSummary = getPositionSummary(userRefId, currentPrice);
 
-  if (activePosition && activePosition.heldAsset !== 'USDC') {
-    const { slPrice, tpPrice, entryPrice } = activePosition;
-    const realHeldAmount = onChainCirBTCAmount;
-    const realHeldNum = parseFloat(realHeldAmount);
-
+  if (posSummary.usedSlots > 0 && onChainCirBTCHeld > 0) {
+    const pnlEmoji = parseFloat(posSummary.pnlPct) >= 0 ? '🟢' : '🔴';
     console.log(
-      `[Position Guard] Active: ${realHeldAmount} ${activePosition.heldAsset} | ` +
-      `Entry: $${entryPrice} | SL: $${slPrice ?? 'N/A'} | TP: $${tpPrice ?? 'N/A'} | ` +
-      `Spot: $${currentPrice}`
+      `\n[Portfolio Position] Holding ${onChainCirBTCAmount} ${posSummary.heldAsset} ` +
+      `(Avg Entry: $${posSummary.avgEntryPrice.toLocaleString()} | PnL: ${posSummary.pnlPct}% / $${posSummary.pnlUsd} ${pnlEmoji})`
     );
+    posSummary.slots.forEach((s) => {
+      console.log(
+        `  • Slot ${s.slotNumber}/${MAX_POSITION_SLOTS}: ${s.amount} ${s.heldAsset} @ $${s.entryPrice.toLocaleString()} ` +
+        `(TP: $${s.tpPrice?.toLocaleString() ?? 'N/A'} | SL: $${s.slPrice?.toLocaleString() ?? 'N/A'})`
+      );
+    });
+    if (posSummary.availableSlots > 0) {
+      console.log(`  • Slots ${posSummary.usedSlots + 1}-${MAX_POSITION_SLOTS}: Available for DCA / New Setups (${posSummary.availableSlots} free)`);
+    }
 
-    const slTriggered = typeof slPrice === 'number' && currentPrice <= slPrice;
-    const tpTriggered = typeof tpPrice === 'number' && currentPrice >= tpPrice;
+    // ── Check Multi-Slot TP / SL Triggers ─────────────────────────────────
+    let exitTriggered = false;
+    let exitReason = '';
+    let triggeredTarget = 0;
 
-    if ((slTriggered || tpTriggered) && realHeldNum > 0) {
-      const exitReason = slTriggered ? 'STOP LOSS' : 'TAKE PROFIT';
-      const pnlPct = entryPrice > 0 ? (((currentPrice - entryPrice) / entryPrice) * 100).toFixed(2) : '0';
-      console.log(`\n🚨 [${exitReason} TRIGGERED] Price $${currentPrice} ${slTriggered ? '<=' : '>='} $${slTriggered ? slPrice : tpPrice} — Exiting position...`);
-      console.log(`[${exitReason}] PnL: ${pnlPct}% | Selling ${realHeldAmount} ${activePosition.heldAsset} → USDC`);
+    for (const slot of posSummary.slots) {
+      if (typeof slot.slPrice === 'number' && currentPrice <= slot.slPrice) {
+        exitTriggered = true;
+        exitReason = 'STOP LOSS';
+        triggeredTarget = slot.slPrice;
+        break;
+      }
+      if (typeof slot.tpPrice === 'number' && currentPrice >= slot.tpPrice) {
+        exitTriggered = true;
+        exitReason = 'TAKE PROFIT';
+        triggeredTarget = slot.tpPrice;
+        break;
+      }
+    }
+
+    if (exitTriggered) {
+      console.log(`\n🚨 [${exitReason} TRIGGERED] Spot $${currentPrice.toLocaleString()} hit target $${triggeredTarget.toLocaleString()} — Exiting all position slots...`);
+      console.log(`[${exitReason}] Net PnL: ${posSummary.pnlPct}% / $${posSummary.pnlUsd} | Selling ${onChainCirBTCAmount} ${posSummary.heldAsset} → USDC`);
 
       try {
         const exitResult = await executeSwap({
           walletAddress: tradingWalletAddress,
           walletId,
-          tokenIn: activePosition.heldAsset as 'cirBTC' | 'EURC',
+          tokenIn: posSummary.heldAsset as 'cirBTC' | 'EURC',
           tokenOut: 'USDC',
-          amountIn: realHeldAmount,
+          amountIn: onChainCirBTCAmount,
           slippageBps: 200,
         });
 
         clearPosition(userRefId);
-        console.log(`[${exitReason}] ✓ Exit swap executed! Tx: ${exitResult.txHash} | Out: ${exitResult.amountOut} USDC`);
+        console.log(`[${exitReason}] ✓ Full exit swap executed! Tx: ${exitResult.txHash} | Out: ${exitResult.amountOut} USDC`);
 
         writeAuditLog({
           cycle: cycleCount, userRefId, tradingWalletAddress, walletId,
           priceFeedPair: decision.pricePairLabel || 'BTC/USD', currentPrice, balances,
-          activePosition: { ...activePosition, amount: realHeldAmount },
+          activePosition: { heldAsset: posSummary.heldAsset, amount: onChainCirBTCAmount, entryPrice: posSummary.avgEntryPrice, enteredAt: Date.now() },
           patternDetected: exitReason, signal: `EXIT_${exitReason.replace(' ', '_')}`,
-          reasoning: `${exitReason}: Price $${currentPrice} breached $${slTriggered ? slPrice : tpPrice}. PnL: ${pnlPct}%`,
+          reasoning: `${exitReason}: Spot $${currentPrice} breached target $${triggeredTarget}. Net PnL: ${posSummary.pnlPct}%`,
           taskFeeSettled: taskFee.settled, taskFeeDisplay: taskFee.feeDisplay, taskFeeError: taskFee.error ?? null,
           policyAllowed: true, policyReason: '', executed: true,
-          swapFrom: activePosition.heldAsset, swapTo: 'USDC', amountIn: realHeldAmount,
+          swapFrom: posSummary.heldAsset, swapTo: 'USDC', amountIn: onChainCirBTCAmount,
           amountOut: exitResult.amountOut ?? 'N/A', txHash: exitResult.txHash ?? null, executionError: null,
         });
 
         return {
           swapAttempted: true, swapSucceeded: true,
-          swapDirection: `${activePosition.heldAsset} → USDC (${exitReason})`,
-          amountIn: realHeldAmount, amountOut: exitResult.amountOut,
+          swapDirection: `${posSummary.heldAsset} → USDC (${exitReason})`,
+          amountIn: onChainCirBTCAmount, amountOut: exitResult.amountOut,
           txHash: exitResult.txHash, timestamp: Date.now(),
         };
       } catch (exitErr) {
@@ -416,11 +442,13 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
         console.error(`[${exitReason}] ✗ Exit swap failed: ${exitErrMsg}`);
         return {
           swapAttempted: true, swapSucceeded: false,
-          swapDirection: `${activePosition.heldAsset} → USDC (${exitReason})`,
+          swapDirection: `${posSummary.heldAsset} → USDC (${exitReason})`,
           error: exitErrMsg, timestamp: Date.now(),
         };
       }
     }
+  } else {
+    console.log(`[Active Positions] 0/${MAX_POSITION_SLOTS} Slots Used — 100% Capital in USDC (Awaiting SMC Signal)`);
   }
 
   // ── 5. Layer 2: Spend Policy Gate ────────────────────────────────────────
@@ -432,32 +460,29 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
     const fromToken = decision.fromToken as string;
     const toToken = decision.toToken as string;
 
-    // ── Position Guard: Block new BUY if already holding the target asset ──
+    // ── Position Guard: Block new BUY if all 5 slots are full ─────────────
     if (fromToken === 'USDC' && toToken !== 'USDC') {
-      const existingPos = getPosition(userRefId);
-      const onChainHeld = parseFloat(onChainCirBTCAmount);
-      if (existingPos && existingPos.heldAsset === toToken && onChainHeld > 0) {
+      if (posSummary.usedSlots >= MAX_POSITION_SLOTS && onChainCirBTCHeld > 0) {
         console.log(
-          `\n🛡️ [Position Guard] BLOCKING new BUY: Already holding ${onChainCirBTCAmount} ${toToken} ` +
-          `(Entry: $${existingPos.entryPrice} | TP: $${existingPos.tpPrice} | SL: $${existingPos.slPrice}). ` +
-          `Waiting for TP/SL exit before opening new position.`
+          `\n🛡️ [Position Guard] MAX POSITIONS REACHED: All 5/5 slots full (Holding ${onChainCirBTCAmount} ${toToken} @ Avg $${posSummary.avgEntryPrice.toLocaleString()}). ` +
+          `Awaiting TP/SL exit before opening new slots.`
         );
 
         writeAuditLog({
           cycle: cycleCount, userRefId, tradingWalletAddress, walletId,
           priceFeedPair: decision.pricePairLabel || 'BTC/USD', currentPrice, balances,
-          activePosition: { ...existingPos, amount: onChainCirBTCAmount },
-          patternDetected: decision.patternDetected, signal: 'BLOCKED_BY_POSITION_GUARD',
-          reasoning: `Position guard: already holding ${onChainCirBTCAmount} ${toToken}. Awaiting TP ($${existingPos.tpPrice}) or SL ($${existingPos.slPrice}).`,
+          activePosition: { heldAsset: toToken, amount: onChainCirBTCAmount, entryPrice: posSummary.avgEntryPrice, enteredAt: Date.now() },
+          patternDetected: decision.patternDetected, signal: 'BLOCKED_MAX_SLOTS',
+          reasoning: `Position guard: max 5/5 slots full (Holding ${onChainCirBTCAmount} ${toToken} @ Avg $${posSummary.avgEntryPrice}). Awaiting TP/SL exit.`,
           taskFeeSettled: taskFee.settled, taskFeeDisplay: taskFee.feeDisplay, taskFeeError: taskFee.error ?? null,
-          policyAllowed: false, policyReason: 'Position Guard: max 1 open position per asset',
+          policyAllowed: false, policyReason: 'Position Guard: max 5 position slots filled',
           executed: false, swapFrom: fromToken, swapTo: toToken, amountIn: decision.amountIn,
           amountOut: 'N/A', txHash: null, executionError: null,
         });
 
         return {
           swapAttempted: false, swapSucceeded: false,
-          policyRejection: `Position Guard: already holding ${onChainCirBTCAmount} ${toToken}`,
+          policyRejection: `Position Guard: max 5/5 slots full (${onChainCirBTCAmount} ${toToken})`,
           timestamp: Date.now(),
         };
       }
@@ -474,7 +499,7 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
       writeAuditLog({
         cycle: cycleCount, userRefId, tradingWalletAddress, walletId,
         priceFeedPair: decision.pricePairLabel || 'BTC/USD', currentPrice, balances,
-        activePosition: activePosition ? { ...activePosition, amount: onChainCirBTCAmount } : null,
+        activePosition: posSummary.usedSlots > 0 ? { heldAsset: posSummary.heldAsset, amount: onChainCirBTCAmount, entryPrice: posSummary.avgEntryPrice, enteredAt: Date.now() } : null,
         patternDetected: decision.patternDetected, signal: 'SIGNAL_ALREADY_EXECUTED',
         reasoning: `Decision from timestamp ${decision.timestamp} already executed. Awaiting next 5-min market analyst cycle or TP/SL hit.`,
         taskFeeSettled: taskFee.settled, taskFeeDisplay: taskFee.feeDisplay, taskFeeError: taskFee.error ?? null,
@@ -611,18 +636,19 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
         const riskDistance = currentPrice - slPrice;
         const tpPrice = parseFloat((currentPrice + (riskDistance * DEFAULT_RR_RATIO)).toFixed(6));
 
-        savePosition(userRefId, {
+        const addResult = addPositionSlot(userRefId, {
           heldAsset: toToken,
           entryPrice: currentPrice,
-          amount: totalHeldAmount,
+          amount: amountOut ?? decision.amountIn,
           enteredAt: Date.now(),
           tpPrice,
           slPrice,
+          txHash,
         });
 
         console.log(`[SMC] Pattern Boundaries — Gemini Pattern Low: ${decision.patternLow ?? 'N/A'}, High: ${decision.patternHigh ?? 'N/A'}`);
         console.log(`[SMC] Structure Risk Parameters — Entry: $${currentPrice} | SL (Pattern Low): $${slPrice} (Risk: $${riskDistance.toFixed(2)}) | TP (1:2 R:R): $${tpPrice}`);
-        console.log(`[SMC] Position saved: ${totalHeldAmount} ${toToken} @ ${currentPrice} (TP: ${tpPrice}, SL: ${slPrice})`);
+        console.log(`[SMC] Slot #${addResult.slotNumber ?? 1}/5 Saved: ${amountOut ?? decision.amountIn} ${toToken} @ $${currentPrice} (TP: $${tpPrice}, SL: $${slPrice})`);
       } else {
         clearPosition(userRefId);
         console.log(`[SMC] Position cleared (exit to USDC)`);
@@ -644,7 +670,7 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
     priceFeedPair: decision.pricePairLabel || 'BTC/USD',
     currentPrice,
     balances,
-    activePosition,
+    activePosition: posSummary.usedSlots > 0 ? { heldAsset: posSummary.heldAsset, amount: onChainCirBTCAmount, entryPrice: posSummary.avgEntryPrice, enteredAt: Date.now() } : null,
     patternDetected: decision.patternDetected,
     signal: decision.action,
     reasoning: decision.reasoning,
