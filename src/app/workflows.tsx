@@ -473,19 +473,45 @@ function AgentPortal({ agent }: { agent: Agent }) {
               });
             }
 
-            if (pos && pos.amount > 0) {
+            if (pos && pos.slots && pos.slots.length > 0) {
+              const pnlEmoji = (pos.pnlPct && parseFloat(pos.pnlPct) >= 0) ? '🟢' : '🔴';
               newLines.push({
                 id: `daemon-pos-${data.cycleCount}-${Date.now()}`,
                 type: 'result',
-                text: `[Open Position] Holding ${pos.amount} ${pos.heldAsset} (Entry: $${pos.entryPrice})`,
+                text: `[Portfolio Position] Holding ${pos.amount} ${pos.heldAsset} (Avg Entry: $${pos.entryPrice} | PnL: ${pos.pnlPct || '+0.00%'} ${pnlEmoji})`,
+                ts: nowTs(),
+              });
+              pos.slots.forEach((s: any) => {
+                newLines.push({
+                  id: `daemon-slot-${s.slotNumber}-${Date.now()}`,
+                  type: 'system',
+                  text: `  • Slot ${s.slotNumber}/5: ${s.amount} ${s.heldAsset} @ $${s.entryPrice} (TP: $${s.tpPrice ?? 'N/A'} | SL: $${s.slPrice ?? 'N/A'})`,
+                  ts: nowTs(),
+                });
+              });
+            } else if (pos && pos.amount && parseFloat(pos.amount) > 0) {
+              newLines.push({
+                id: `daemon-pos-${data.cycleCount}-${Date.now()}`,
+                type: 'result',
+                text: `[Portfolio Position] Holding ${pos.amount} ${pos.heldAsset} (Entry: $${pos.entryPrice})`,
+                ts: nowTs(),
+              });
+            } else {
+              newLines.push({
+                id: `daemon-pos-${data.cycleCount}-${Date.now()}`,
+                type: 'system',
+                text: `[Active Positions] 0/5 Slots Used — 100% Capital in USDC (Awaiting SMC Signal)`,
                 ts: nowTs(),
               });
             }
 
+            const feeSettled = cr?.taskFeeSettled;
             newLines.push({
               id: `daemon-fee-${data.cycleCount}-${Date.now()}`,
               type: 'system',
-              text: `[Nanopayment] 0.0001 USDC task-fee settled via EIP-3009 per cycle.`,
+              text: feeSettled
+                ? `[Nanopayment] 0.0001 USDC task-fee settled via EIP-3009 per cycle.`
+                : `[Nanopayment] Task-fee waived (Gateway balance empty / trial mode).`,
               ts: nowTs(),
             });
 

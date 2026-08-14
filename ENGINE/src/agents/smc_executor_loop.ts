@@ -277,6 +277,10 @@ export interface CycleResult {
   error?: string;
   /** Policy rejection reason if applicable */
   policyRejection?: string;
+  /** Whether the EIP-3009 nanopayment task fee settled on-chain */
+  taskFeeSettled?: boolean;
+  /** Fee display string */
+  taskFeeDisplay?: string;
   /** Timestamp of this result (epoch ms) */
   timestamp: number;
 }
@@ -698,6 +702,8 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
     txHash: txHash ?? undefined,
     error: executionError ?? ((!policyAllowed && decision.action === 'SWAP') ? undefined : undefined),
     policyRejection: (!policyAllowed && decision.action === 'SWAP') ? policyReason : undefined,
+    taskFeeSettled: taskFee.settled,
+    taskFeeDisplay: taskFee.feeDisplay,
     timestamp: Date.now(),
   };
 }
