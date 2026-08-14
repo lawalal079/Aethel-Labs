@@ -351,8 +351,7 @@ export default function MyAgents() {
                     )}
                   </div>
                 </div>
-              </div>
-            );
+              );
           })}
         </div>
       )}
