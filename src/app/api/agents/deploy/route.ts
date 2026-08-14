@@ -17,7 +17,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createPublicClient, http, parseAbi, type Address } from 'viem';
+import { createPublicClient, http, parseAbi, getAddress, type Address } from 'viem';
 
 // ── Chain & contract config (mirrors endpoints/route.ts) ─────────────────────
 
@@ -125,22 +125,31 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Fallback: check Circle Gateway REST API
-    if (!hasMinGatewayBalance) {
+    // Fallback: check Circle Gateway REST API for all candidate addresses
+    if (!hasMinGatewayBalance && addressesToCheck.length > 0) {
       try {
+        const sources = addressesToCheck.map(a => ({
+          depositor: getAddress(a),
+          domain: 26,
+        }));
         const circleRes = await fetch('https://gateway-api-testnet.circle.com/v1/balances', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             token: 'USDC',
-            sources: [{ depositor: getAddress(userAddress), domain: 26 }],
+            sources,
           }),
         });
         if (circleRes.ok) {
           const circleData = await circleRes.json();
-          const found = parseFloat(circleData?.balances?.[0]?.balance ?? '0');
-          if (found >= 0.0001) {
-            hasMinGatewayBalance = true;
+          const balances = circleData?.balances || [];
+          for (const b of balances) {
+            const found = parseFloat(b?.balance ?? '0');
+            console.log(`[fe-deploy-gw] Circle API balance for ${b?.depositor || 'account'}: ${found} USDC`);
+            if (found >= 0.0001) {
+              hasMinGatewayBalance = true;
+              break;
+            }
           }
         }
       } catch (circleErr: any) {

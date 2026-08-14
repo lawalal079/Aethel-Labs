@@ -2054,21 +2054,32 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        // Fallback: check Circle Gateway REST API
-        if (!hasGatewayFunds) {
+        // Fallback: check Circle Gateway REST API for all candidate addresses
+        if (!hasGatewayFunds && addrsToCheck.length > 0) {
           try {
+            const sources = addrsToCheck.map(a => ({
+              depositor: getAddress(a),
+              domain: 26,
+            }));
             const circleRes = await fetch('https://gateway-api-testnet.circle.com/v1/balances', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 token: 'USDC',
-                sources: [{ depositor: getAddress(verifiedAddress), domain: 26 }],
+                sources,
               }),
             });
             if (circleRes.ok) {
               const circleData = await circleRes.json();
-              const found = parseFloat(circleData?.balances?.[0]?.balance ?? '0');
-              if (found >= 0.0001) hasGatewayFunds = true;
+              const balances = circleData?.balances || [];
+              for (const b of balances) {
+                const found = parseFloat(b?.balance ?? '0');
+                console.log(`[deploy-step-4b] Circle API balance for ${b?.depositor || 'account'}: ${found} USDC`);
+                if (found >= 0.0001) {
+                  hasGatewayFunds = true;
+                  break;
+                }
+              }
             }
           } catch (circleErr: any) {
             console.warn('[deploy-step-4b-warn] Circle API check error:', circleErr.message);
