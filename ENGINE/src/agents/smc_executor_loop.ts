@@ -225,9 +225,14 @@ async function readTokenBalance(tokenAddress: Address, walletAddress: Address): 
   return 0n;
 }
 
+import { TOKEN_ADDRESSES } from '../lib/dex-router';
+
 // ── Known Token Addresses on Arc Testnet ──────────────────────────────────────
-const EURC_ADDRESS = (process.env.EURC_ADDRESS ?? '0x3700000000000000000000000000000000000000') as Address;
-const CIRBTC_ADDRESS = (process.env.CIRBTC_ADDRESS ?? '0x3800000000000000000000000000000000000000') as Address;
+const EURC_ADDRESS = (process.env.EURC_ADDRESS ?? TOKEN_ADDRESSES.EURC.address) as Address;
+const CIRBTC_ADDRESS = (process.env.CIRBTC_ADDRESS ?? TOKEN_ADDRESSES.cirBTC.address) as Address;
+
+// ── Decision Execution Tracker (Prevents 60s re-execution of 5-min signals) ───
+const _lastExecutedDecisionTimestamps = new Map<string, number>();
 
 // ── Daemon State ──────────────────────────────────────────────────────────────
 
@@ -458,6 +463,33 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
       }
     }
 
+    // ── Check if this exact 5-minute decision was already executed for this user ──
+    const lastExecutedTs = _lastExecutedDecisionTimestamps.get(userRefId) || 0;
+    if (decision.timestamp && decision.timestamp === lastExecutedTs) {
+      console.log(
+        `[SMC] Market Analyst decision (${decision.patternDetected} @ ${decision.timestamp}) was already executed for ${userRefId}. ` +
+        `Skipping re-execution — strictly monitoring active position for TP/SL.`
+      );
+
+      writeAuditLog({
+        cycle: cycleCount, userRefId, tradingWalletAddress, walletId,
+        priceFeedPair: decision.pricePairLabel || 'BTC/USD', currentPrice, balances,
+        activePosition: activePosition ? { ...activePosition, amount: onChainCirBTCAmount } : null,
+        patternDetected: decision.patternDetected, signal: 'SIGNAL_ALREADY_EXECUTED',
+        reasoning: `Decision from timestamp ${decision.timestamp} already executed. Awaiting next 5-min market analyst cycle or TP/SL hit.`,
+        taskFeeSettled: taskFee.settled, taskFeeDisplay: taskFee.feeDisplay, taskFeeError: taskFee.error ?? null,
+        policyAllowed: false, policyReason: 'Decision already executed in current interval',
+        executed: false, swapFrom: fromToken, swapTo: toToken, amountIn: decision.amountIn,
+        amountOut: 'N/A', txHash: null, executionError: null,
+      });
+
+      return {
+        swapAttempted: false, swapSucceeded: false,
+        policyRejection: 'Signal already executed in current interval',
+        timestamp: Date.now(),
+      };
+    }
+
     // Position Sizing: 5% of Trading Wallet USDC Balance (min $1.00 USDC)
     if (decision.fromToken === 'USDC') {
       const TRADE_ALLOCATION_PCT = 0.05;
@@ -535,6 +567,11 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
       txHash = execResult.txHash;
       amountOut = execResult.amountOut ?? amountOut;
       executed = true;
+
+      // Mark this decision timestamp as executed so subsequent 60s cycles skip re-buying
+      if (decision.timestamp) {
+        _lastExecutedDecisionTimestamps.set(userRefId, decision.timestamp);
+      }
 
       console.log(`[SMC] ✓ Swap executed! Tx: ${txHash} | Out: ${amountOut} ${toToken}`);
 
