@@ -18,7 +18,7 @@
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
-import { parseUnits, formatUnits, type Address, type Hex } from 'viem';
+import { parseAbi, parseUnits, formatUnits, type Address, type Hex } from 'viem';
 
 import { getOrAssignTradingWallet } from '../lib/trading-wallet';
 import { estimateSwap, executeSwap } from '../lib/appkit-swap';
