@@ -300,23 +300,10 @@ export default function MyAgents() {
                   )}
                 </div>
 
-                  {/* Card Footer Controls */}
-                  <div className="flex flex-col gap-2 pt-4 border-t border-[#2A2F35]">
-                    {isTradingAgent && !isDaemonRunning && parseFloat(spendingBalance || '0') <= 0 && (
-                      <div className="flex items-center justify-between px-3 py-2 bg-amber-950/20 border border-amber-900/30 rounded-lg text-[11px] text-amber-300">
-                        <span>⚠️ Gateway empty ($0.00) — Required to run</span>
-                        <button
-                          onClick={() => setActiveTab('billing')}
-                          className="text-[#4E8981] hover:underline font-bold ml-2 cursor-pointer"
-                        >
-                          Deposit →
-                        </button>
-                      </div>
-                    )}
-
-                    <div className="flex items-center gap-3">
-                      {isTradingAgent ? (
-                        <>
+                {/* Card Footer Controls */}
+                <div className="flex items-center gap-3 pt-4 border-t border-[#2A2F35]">
+                  {isTradingAgent ? (
+                    <>
                           {isDaemonRunning ? (
                             <button
                               id={`stop-daemon-${agent.id}`}

@@ -758,16 +758,6 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
       return false;
     }
 
-    // ── Gateway Spending Balance Check ──────────────────────────────────────
-    const parsedSpending = parseFloat(spendingBalance || '0');
-    if (isNaN(parsedSpending) || parsedSpending <= 0) {
-      showToast(
-        '⚠️ Insufficient Gateway Balance: Deposit USDC into your Gateway Account on the Billing page to power daemon cycles.',
-        'error'
-      );
-      return false;
-    }
-
     setIsDeployingDaemon(true);
     try {
       const res = await fetch('/api/agents/deploy', {
