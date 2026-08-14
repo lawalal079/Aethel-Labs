@@ -20,7 +20,7 @@ import { verifyRequestAuth } from '../lib/auth-utils';
 import { checkSpendPolicy, recordSpend } from '../lib/spend-limit-policy';
 import { recordTransaction, getUserTransactions, getAllTransactions } from '../lib/transaction-store';
 import { saveRating, getAgentRatingStats, getAllRatings } from '../lib/rating-store';
-import { type Hash, type Address, parseAbi } from 'viem';
+import { type Hash, type Address, parseAbi, getAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { ethers } from 'ethers';
 import { agentRegistry, AgentConfiguration, userSessions } from '../agents';
@@ -2027,42 +2027,60 @@ const server = http.createServer(async (req, res) => {
         }
 
 
-        // 4b. Verify Gateway Spending Balance — block execution if unfunded
+        // 4b. Verify Gateway Spending Balance — block execution if unfunded (min 0.0001 USDC = 100 units)
         console.log(`[deploy-step-4b] Checking Gateway balance for ${verifiedAddress}...`);
         const GATEWAY_ADDR = (process.env.GATEWAY_ADDRESS || '0x0077777d7EBA4688BDeF3E311b846F25870A19B9') as Address;
         const USDC_ADDR = (process.env.USDC_ADDRESS || '0x3600000000000000000000000000000000000000') as Address;
-        const GW_ABI = parseAbi(['function availableBalance(address, address) view returns (uint256)']);
+        const GW_ABI = parseAbi(['function availableBalance(address token, address depositor) external view returns (uint256)']);
         
         let hasGatewayFunds = false;
-        try {
-          const userGwBal = await publicClient.readContract({
-            address: GATEWAY_ADDR,
-            abi: GW_ABI,
-            functionName: 'availableBalance',
-            args: [USDC_ADDR, verifiedAddress as Address],
-          }) as bigint;
-          if (userGwBal > 0n) {
-            hasGatewayFunds = true;
-          } else {
-            // Also check fee wallet as fallback
-            const fwGwBal = await publicClient.readContract({
+        const addrsToCheck = [verifiedAddress, feeWallet.address].filter(Boolean);
+
+        for (const addr of addrsToCheck) {
+          try {
+            const checksummed = getAddress(addr);
+            const rawBal = await publicClient.readContract({
               address: GATEWAY_ADDR,
               abi: GW_ABI,
               functionName: 'availableBalance',
-              args: [USDC_ADDR, feeWallet.address as Address],
+              args: [USDC_ADDR, checksummed],
             }) as bigint;
-            if (fwGwBal > 0n) hasGatewayFunds = true;
+            if (rawBal >= 100n) { // 100 atomic units = 0.0001 USDC
+              hasGatewayFunds = true;
+              break;
+            }
+          } catch (gwErr: any) {
+            console.warn('[deploy-step-4b-warn] Gateway balance query warning:', gwErr.message);
           }
-        } catch (gwErr: any) {
-          console.warn('[deploy-step-4b-warn] Gateway balance query warning:', gwErr.message);
+        }
+
+        // Fallback: check Circle Gateway REST API
+        if (!hasGatewayFunds) {
+          try {
+            const circleRes = await fetch('https://gateway-api-testnet.circle.com/v1/balances', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                token: 'USDC',
+                sources: [{ depositor: getAddress(verifiedAddress), domain: 26 }],
+              }),
+            });
+            if (circleRes.ok) {
+              const circleData = await circleRes.json();
+              const found = parseFloat(circleData?.balances?.[0]?.balance ?? '0');
+              if (found >= 0.0001) hasGatewayFunds = true;
+            }
+          } catch (circleErr: any) {
+            console.warn('[deploy-step-4b-warn] Circle API check error:', circleErr.message);
+          }
         }
 
         if (!hasGatewayFunds) {
-          console.log(`[deploy-step-4b-reject] Deployment rejected: Gateway balance is 0 for ${verifiedAddress}`);
+          console.log(`[deploy-step-4b-reject] Deployment rejected: Gateway balance < 0.0001 USDC for ${verifiedAddress}`);
           res.writeHead(402);
           res.end(JSON.stringify({
             success: false,
-            error: 'INSUFFICIENT_GATEWAY_BALANCE: Gateway Spending balance is 0.00 USDC. Please deposit funds on the Billing page to activate autonomous agent execution.',
+            error: 'INSUFFICIENT_GATEWAY_BALANCE: Minimum 0.0001 USDC required in Gateway Spending Account. Please deposit funds on the Billing page to activate.',
           }));
           return;
         }

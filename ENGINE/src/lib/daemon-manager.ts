@@ -87,6 +87,12 @@ async function _runCycle(entry: DaemonEntry): Promise<void> {
     entry.cycleCount++;
     entry.lastCycleAt = Date.now();
     entry.lastCycleResult = result;
+
+    // ── Auto-stop daemon immediately if Gateway task-fee balance is exhausted ──
+    if (result && result.taskFeeSettled === false) {
+      console.warn(`[DaemonManager] 🚨 Auto-stopping daemon for ${entry.userAddress}: Gateway task fee could not settle (balance empty).`);
+      stopDaemon(entry.userAddress);
+    }
   } catch (err) {
     console.error(
       `[DaemonManager] Cycle error for ${entry.userAddress}:`,

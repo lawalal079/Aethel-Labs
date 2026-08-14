@@ -98,29 +98,61 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── Layer 1b: On-chain Gateway Spending Balance check ────────────────────
+    // ── Layer 1b: On-chain Gateway Spending Balance check (min 0.0001 USDC = 100 units) ──
     const GATEWAY_ADDR = (process.env.GATEWAY_ADDRESS || '0x0077777d7EBA4688BDeF3E311b846F25870A19B9') as Address;
     const USDC_ADDR = (process.env.USDC_ADDRESS || '0x3600000000000000000000000000000000000000') as Address;
-    const GW_ABI = parseAbi(['function availableBalance(address, address) view returns (uint256)']);
+    const GW_ABI = parseAbi(['function availableBalance(address token, address depositor) external view returns (uint256)']);
     
-    let gwBalance = 0n;
-    try {
-      gwBalance = await _publicClient.readContract({
-        address: GATEWAY_ADDR,
-        abi: GW_ABI,
-        functionName: 'availableBalance',
-        args: [USDC_ADDR, userAddress as Address],
-      }) as bigint;
-      console.log(`[fe-deploy-gw] Gateway balance for ${userAddress}: ${gwBalance} atomic units`);
-    } catch (err: any) {
-      console.warn('[fe-deploy-gw-warn] Gateway balance read error:', err.message);
+    let hasMinGatewayBalance = false;
+    const addressesToCheck = [userAddress, feeWalletAddress].filter(Boolean);
+
+    for (const addr of addressesToCheck) {
+      try {
+        const checksummed = getAddress(addr);
+        const rawBal = await _publicClient.readContract({
+          address: GATEWAY_ADDR,
+          abi: GW_ABI,
+          functionName: 'availableBalance',
+          args: [USDC_ADDR, checksummed],
+        }) as bigint;
+        console.log(`[fe-deploy-gw] Gateway on-chain balance for ${checksummed}: ${rawBal} atomic units`);
+        if (rawBal >= 100n) { // 100 atomic units = 0.0001 USDC
+          hasMinGatewayBalance = true;
+          break;
+        }
+      } catch (err: any) {
+        console.warn('[fe-deploy-gw-warn] Gateway on-chain balance read error:', err.message);
+      }
     }
 
-    if (gwBalance === 0n) {
+    // Fallback: check Circle Gateway REST API
+    if (!hasMinGatewayBalance) {
+      try {
+        const circleRes = await fetch('https://gateway-api-testnet.circle.com/v1/balances', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token: 'USDC',
+            sources: [{ depositor: getAddress(userAddress), domain: 26 }],
+          }),
+        });
+        if (circleRes.ok) {
+          const circleData = await circleRes.json();
+          const found = parseFloat(circleData?.balances?.[0]?.balance ?? '0');
+          if (found >= 0.0001) {
+            hasMinGatewayBalance = true;
+          }
+        }
+      } catch (circleErr: any) {
+        console.warn('[fe-deploy-gw-warn] Circle API balance check error:', circleErr.message);
+      }
+    }
+
+    if (!hasMinGatewayBalance) {
       return NextResponse.json(
         {
           success: false,
-          error: 'INSUFFICIENT_GATEWAY_BALANCE: Your Gateway Spending balance is 0.00 USDC. Please deposit funds on the Billing page to activate autonomous agent execution.',
+          error: 'INSUFFICIENT_GATEWAY_BALANCE: Minimum 0.0001 USDC required in Gateway Spending Account. Please deposit funds on the Billing page to activate.',
         },
         { status: 402 }
       );
