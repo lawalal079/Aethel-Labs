@@ -59,7 +59,7 @@ const USDCIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
 );
 
 export default function Billing() {
-  const { executionLogs, daemonStatus } = useApp();
+  const { executionLogs, daemonStatus, deployedAgentIds } = useApp();
   const circle = useCircleWallet();
 
   const [filterQuery, setFilterQuery] = useState('');
@@ -603,9 +603,10 @@ export default function Billing() {
     }
   });
 
-  const isDaemonRunning = Boolean(daemonStatus?.running);
+  const activeAgentCount = daemonStatus?.running ? Math.max(1, deployedAgentIds?.length || 1) : 0;
+  const isDaemonRunning = activeAgentCount > 0;
   const daemonInterval = daemonStatus?.intervalSeconds || 60;
-  const activeDailyBurn = isDaemonRunning ? (86400 / daemonInterval) * 0.0001 : 0;
+  const activeDailyBurn = isDaemonRunning ? activeAgentCount * (86400 / daemonInterval) * 0.0001 : 0;
   const daemonCycleSpendToday = (daemonStatus?.cycleCount || 0) * 0.0001;
   const todaySpend = isDaemonRunning ? Math.max(activeDailyBurn, daemonCycleSpendToday + todayLogsSpend) : (daemonCycleSpendToday + todayLogsSpend);
 
@@ -621,19 +622,25 @@ export default function Billing() {
 
   const currentGatewayBal = parseFloat(gatewayBalance || '0');
   const availableCycles = Math.floor(currentGatewayBal / 0.0001);
-  let depletionText = `${availableCycles} cycles`;
+  let depletionText = '';
   if (isDaemonRunning && activeDailyBurn > 0 && currentGatewayBal > 0) {
     const days = currentGatewayBal / activeDailyBurn;
-    if (days < 1) {
-      const hours = (days * 24).toFixed(1);
-      depletionText = `${hours} hours (~${availableCycles} cycles)`;
+    const cyclesPerAgent = Math.floor(availableCycles / activeAgentCount);
+    const timeStr = days < (1 / 24)
+      ? `${Math.max(1, Math.round(days * 1440))}m`
+      : days < 1
+        ? `${(days * 24).toFixed(1)}h`
+        : `${days.toFixed(1)}d`;
+
+    if (activeAgentCount > 1) {
+      depletionText = `~${timeStr} (${cyclesPerAgent} cycles/agent across ${activeAgentCount} agents)`;
     } else {
-      depletionText = `${days.toFixed(1)} days (~${availableCycles} cycles)`;
+      depletionText = `~${timeStr} (~${cyclesPerAgent} cycles)`;
     }
   } else if (currentGatewayBal > 0) {
-    depletionText = `~${availableCycles} cycles available`;
+    depletionText = `${availableCycles} cycles in reserve (All agents paused)`;
   } else {
-    depletionText = '0 cycles (depleted)';
+    depletionText = '0 cycles in reserve (Deposit on right to activate)';
   }
 
   return (
@@ -751,13 +758,19 @@ export default function Billing() {
             {/* Vertical divider */}
             <div className="hidden md:block bg-[#2A2F35] mx-0" />
 
-            {/* Consumption Rate */}
+            {/* Compute Burn Rate */}
             <div className="md:pl-8 flex flex-col justify-between mt-6 md:mt-0">
               <div className="flex justify-between items-center mb-4">
-                <p className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider">Consumption Rate</p>
-                <span className="text-[9px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-800/40 text-emerald-400">
-                  Live Spend
-                </span>
+                <p className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider">Compute Burn Rate</p>
+                {activeAgentCount > 0 ? (
+                  <span className="text-[9px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-800/40 text-emerald-400">
+                    {activeAgentCount === 1 ? '1 Active' : `${activeAgentCount} Active`}
+                  </span>
+                ) : (
+                  <span className="text-[9px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-slate-900/60 border border-slate-700/50 text-[#8a8f98]">
+                    Idle
+                  </span>
+                )}
               </div>
               <div className="space-y-4">
                 <div className="flex justify-between items-end">
