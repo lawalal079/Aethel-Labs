@@ -641,7 +641,7 @@ export default function Billing() {
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
         <div>
-          <h2 className="text-3xl font-bold text-white mb-1 tracking-tight font-sans">Gas Tank Billing Hub</h2>
+          <h2 className="text-3xl font-bold text-white mb-1 tracking-tight font-sans">Billing Hub</h2>
           <p className="text-[#8a8f98] text-sm">Manage your decentralized compute credits and Gateway balances.</p>
         </div>
         <button
