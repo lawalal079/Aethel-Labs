@@ -53,6 +53,6 @@ export function recordTransaction(tx: Omit<TransactionRecord, 'id' | 'createdAtM
 export function getUserTransactions(userAddress: string): TransactionRecord[] {
   if (!userAddress) return [];
   const records = getAllTransactions();
-  const target = userAddress.toLowerCase();
-  return records.filter(r => r.userAddress && r.userAddress.toLowerCase() === target);
+  const targets = userAddress.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  return records.filter(r => r.userAddress && targets.includes(r.userAddress.toLowerCase()));
 }

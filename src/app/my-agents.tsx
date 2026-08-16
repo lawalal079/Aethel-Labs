@@ -340,13 +340,14 @@ export default function MyAgents() {
                         )}
 
                           <button
+                            id={`view-logs-${agent.id}`}
                             onClick={() => {
                               setSelectedAgentForDeploy(agent);
                               setActiveTab('workflows');
                             }}
-                            className="flex-1 py-2.5 bg-transparent border border-[#2A2F35] hover:border-[#4E8981]/50 text-[#8a8f98] hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                            className="flex-1 py-2.5 bg-transparent border border-[#2A2F35] hover:border-[#4E8981]/50 text-[#8a8f98] hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95"
                           >
-                            <span>Execute Mission</span>
+                            <span>View Logs</span>
                             <ArrowRight size={12} weight="bold" />
                           </button>
                         </>

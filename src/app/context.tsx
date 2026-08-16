@@ -211,6 +211,19 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Restore cached transactions immediately on wallet connect
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem(`aethel_tx_ledger_${walletAddress.toLowerCase()}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setExecutionLogs(parsed);
+          }
+        }
+      } catch {}
+    }
+
     let cancelled = false;
 
     const formatBlockTimestamp = (timestampInSeconds: number) => {
@@ -411,8 +424,19 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
           }
         }
 
-        if (!cancelled) {
-          setExecutionLogs(realLogs);
+        if (!cancelled && realLogs.length > 0) {
+          setExecutionLogs(prev => {
+            const map = new Map<string, ExecutionLog>();
+            for (const l of prev) { if (l?.id) map.set(l.id, l); }
+            for (const l of realLogs) { if (l?.id) map.set(l.id, l); }
+            const merged = Array.from(map.values()).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+            if (typeof window !== 'undefined' && walletAddress) {
+              try {
+                localStorage.setItem(`aethel_tx_ledger_${walletAddress.toLowerCase()}`, JSON.stringify(merged.slice(0, 100)));
+              } catch {}
+            }
+            return merged;
+          });
         }
       } catch (err) {
         console.error('[context] Error fetching real on-chain logs:', err);
@@ -540,10 +564,17 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
           }
 
           setExecutionLogs(prev => {
-            // De-duplicate: only add logs we haven't seen yet
-            const existingIds = new Set(prev.map(l => l.id));
-            const fresh = newLogs.filter(l => !existingIds.has(l.id));
-            return [...fresh, ...prev];
+            // Merge and de-duplicate: never wipe existing logs
+            const map = new Map<string, ExecutionLog>();
+            for (const l of prev) { if (l?.id) map.set(l.id, l); }
+            for (const l of newLogs) { if (l?.id) map.set(l.id, l); }
+            const merged = Array.from(map.values()).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+            if (typeof window !== 'undefined' && walletAddress) {
+              try {
+                localStorage.setItem(`aethel_tx_ledger_${walletAddress.toLowerCase()}`, JSON.stringify(merged.slice(0, 100)));
+              } catch {}
+            }
+            return merged;
           });
         }
 
@@ -723,12 +754,13 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
 
   // ── Fetch Real Transaction Ledger ──────────────────────────────────────────
   const fetchTransactions = useCallback(async () => {
-    const targetAddr = feeWalletAddress || walletAddress;
+    if (!walletAddress) return;
+    const targetAddrs = [walletAddress, feeWalletAddress].filter(Boolean).join(',');
     try {
-      const res = await fetch(`/api/agents/transactions?userAddress=${encodeURIComponent(targetAddr || '')}`);
+      const res = await fetch(`/api/agents/transactions?userAddress=${encodeURIComponent(targetAddrs)}`);
       if (!res.ok) return;
       const data = await res.json();
-      if (Array.isArray(data.transactions)) {
+      if (Array.isArray(data.transactions) && data.transactions.length > 0) {
         const mappedLogs: ExecutionLog[] = data.transactions.map((t: any) => ({
           id: t.id,
           agent_id: t.agentId || 'system',
@@ -739,7 +771,18 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
           cost_usdc: t.amountUsdc || 0,
           tx_hash: t.txHash || t.id,
         }));
-        setExecutionLogs(mappedLogs);
+        setExecutionLogs(prev => {
+          const map = new Map<string, ExecutionLog>();
+          for (const l of prev) { if (l?.id) map.set(l.id, l); }
+          for (const l of mappedLogs) { if (l?.id) map.set(l.id, l); }
+          const merged = Array.from(map.values()).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+          if (typeof window !== 'undefined' && walletAddress) {
+            try {
+              localStorage.setItem(`aethel_tx_ledger_${walletAddress.toLowerCase()}`, JSON.stringify(merged.slice(0, 100)));
+            } catch {}
+          }
+          return merged;
+        });
       }
     } catch (err) {
       console.warn('[context] fetchTransactions failed:', err);
@@ -759,47 +802,54 @@ function AppProviderInner({ children }: { children: React.ReactNode }) {
     }
 
     setIsDeployingDaemon(true);
-    try {
-      const res = await fetch('/api/agents/deploy', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${loginResult.userToken}`,
-        },
-        body: JSON.stringify({
-          userAddress: walletAddress,
-          // Pass Fee Wallet address so the Layer-1 license check targets the right address.
-          // Licenses are now issued to the Fee Wallet (not the User-Controlled wallet).
-          feeWalletAddress: feeWalletAddress ?? null,
-          agentId,
-          intervalSeconds: 60,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.success === false) {
-        const rawErr = data.error || 'Failed to start daemon';
-        let cleanErr = rawErr;
-        if (rawErr.includes('License verification') || rawErr.includes('userLicenses') || rawErr.includes('0x14dec') || rawErr.includes('Raw Call Arguments')) {
-          cleanErr = 'License verification busy due to testnet RPC latency. Please retry in a moment.';
+    let lastError: any = null;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch('/api/agents/deploy', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${loginResult.userToken}`,
+          },
+          body: JSON.stringify({
+            userAddress: walletAddress,
+            feeWalletAddress: feeWalletAddress ?? null,
+            agentId,
+            intervalSeconds: 60,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.success === false) {
+          const rawErr = data.error || 'Failed to start daemon';
+          let cleanErr = rawErr;
+          if (rawErr.includes('License verification') || rawErr.includes('userLicenses') || rawErr.includes('0x14dec') || rawErr.includes('Raw Call Arguments')) {
+            cleanErr = 'License verification busy due to testnet RPC latency. Please retry in a moment.';
+          }
+          throw new Error(cleanErr);
         }
-        throw new Error(cleanErr);
+        setDeployedAgentIds(prev => prev.includes(agentId) ? prev : [...prev, agentId]);
+        showToast('Agent daemon started successfully!', 'success');
+        await refreshDaemonStatus();
+        setIsDeployingDaemon(false);
+        return true;
+      } catch (err: any) {
+        lastError = err;
+        if (attempt < 2) {
+          await new Promise(res => setTimeout(res, 600 * (attempt + 1)));
+        }
       }
-      setDeployedAgentIds(prev => prev.includes(agentId) ? prev : [...prev, agentId]);
-      showToast('Agent daemon started successfully!', 'success');
-      await refreshDaemonStatus();
-      return true;
-    } catch (err: any) {
-      console.error('[context] startDaemonForAgent error:', err);
-      const rawMsg = err?.message || 'Failed to start daemon';
-      let cleanMsg = rawMsg;
-      if (rawMsg.includes('0x14dec') || rawMsg.includes('Raw Call Arguments') || rawMsg.includes('userLicenses')) {
-        cleanMsg = 'License check busy due to testnet RPC latency. Please retry in a moment.';
-      }
-      showToast(cleanMsg, 'error');
-      return false;
-    } finally {
-      setIsDeployingDaemon(false);
     }
+
+    setIsDeployingDaemon(false);
+    console.error('[context] startDaemonForAgent error:', lastError);
+    const rawMsg = lastError?.message || 'Failed to start daemon';
+    let cleanMsg = rawMsg;
+    if (rawMsg.includes('0x14dec') || rawMsg.includes('Raw Call Arguments') || rawMsg.includes('userLicenses')) {
+      cleanMsg = 'License check busy due to testnet RPC latency. Please retry in a moment.';
+    }
+    showToast(cleanMsg, 'error');
+    return false;
   }, [walletAddress, feeWalletAddress, loginResult, refreshDaemonStatus, showToast]);
 
 

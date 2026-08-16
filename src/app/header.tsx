@@ -55,10 +55,11 @@ export default function Header() {
 
         {/* ── Logo ─────────────────────────────────────────────────────── */}
         <div className="flex items-center gap-8">
-          <h1 className="text-2xl font-bold text-white tracking-wide"
-            style={{ textShadow: '-2px 0 #00F0FF, 2px 0 #FF4A1C' }}>
-            Æthel Labs
-          </h1>
+          <img
+            src="/header-logo.png"
+            alt="Æthel Labs"
+            className="h-8 md:h-9 w-auto object-contain select-none"
+          />
         </div>
 
         {/* ── Right Actions ────────────────────────────────────────────── */}

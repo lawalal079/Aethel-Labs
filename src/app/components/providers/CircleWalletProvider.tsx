@@ -47,7 +47,7 @@ const publicClient = createPublicClient({
 });
 
 /** Retry helper — fast exponential backoff for RPC calls. */
-async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 2, baseDelayMs = 400): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3, baseDelayMs = 400): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
@@ -64,8 +64,8 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 2, baseDelayMs =
 }
 
 /** Wallet balance — Agent Wallet's own USDC via balanceOf() */
-async function fetchUsdcBalance(address: Address): Promise<string> {
-  if (!USDC_ADDRESS) return '0.00';
+async function fetchUsdcBalance(address: Address): Promise<string | null> {
+  if (!USDC_ADDRESS || !address) return null;
   try {
     const checksummed = getAddress(address);
     const raw = await withRetry(() =>
@@ -73,14 +73,14 @@ async function fetchUsdcBalance(address: Address): Promise<string> {
     );
     return parseFloat(formatUnits(raw as bigint, 6)).toFixed(2);
   } catch (err) {
-    console.warn('[CircleWalletProvider] fetchUsdcBalance error (all retries exhausted):', err);
-    return '0.00';
+    console.warn('[CircleWalletProvider] fetchUsdcBalance transient RPC error:', err);
+    return null; // Return null so state preserves last known good balance
   }
 }
 
 /** Spending balance — Gateway's available balance via on-chain contract + API fallback */
-async function fetchGatewayBalance(address: Address): Promise<string> {
-  if (!address) return '0.00';
+async function fetchGatewayBalance(address: Address): Promise<string | null> {
+  if (!address) return null;
   try {
     const checksummed = getAddress(address);
     
@@ -99,7 +99,7 @@ async function fetchGatewayBalance(address: Address): Promise<string> {
         return val;
       }
     } catch (onChainErr) {
-      console.warn('[CircleWalletProvider] On-chain Gateway read failed, trying API fallback:', onChainErr);
+      console.warn('[CircleWalletProvider] On-chain Gateway read transient error, trying API fallback:', onChainErr);
     }
 
     // 2. Fallback: Query Circle Gateway /v1/balances REST API endpoint
@@ -121,10 +121,10 @@ async function fetchGatewayBalance(address: Address): Promise<string> {
       }
     } catch (apiErr) {}
 
-    return '0.00';
+    return null; // Return null on network error to preserve last known good balance
   } catch (err) {
     console.warn('[CircleWalletProvider] fetchGatewayBalance error:', err);
-    return '0.00';
+    return null;
   }
 }
 

@@ -43,6 +43,34 @@ const _LICENSE_ABI = parseAbi([
 
 const ENGINE_URL = process.env.NEXT_PUBLIC_ENGINE_URL ?? 'http://localhost:4000';
 
+async function fetchEngineWithRetry(endpoint: string, options: RequestInit, retries = 3): Promise<Response> {
+  const isLocal = ENGINE_URL.includes('localhost') || ENGINE_URL.includes('127.0.0.1');
+  const urls = [
+    `${ENGINE_URL}${endpoint}`,
+    ...(isLocal ? [`http://127.0.0.1:4000${endpoint}`, `http://localhost:4000${endpoint}`] : []),
+  ];
+  const uniqueUrls = Array.from(new Set(urls));
+
+  let lastError: any;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    for (const url of uniqueUrls) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timeoutId);
+        return res;
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+    if (attempt < retries - 1) {
+      await new Promise(res => setTimeout(res, 400 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
 // ── POST /api/agents/deploy ───────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
@@ -167,31 +195,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── Layer 2: Forward to ENGINE with original Authorization header ──────────
+    // ── Layer 2: Forward to ENGINE with retry helper ────────────────────────
     const authHeader = request.headers.get('Authorization') ?? request.headers.get('authorization');
     if (!authHeader) {
       return NextResponse.json(
         { error: 'Missing Authorization header. Provide your Circle session token as Bearer.' },
-        { status: 401 },
+        { status: 401 }
       );
     }
 
     console.log(`[fe-deploy-3] Forwarding request to ENGINE at ${ENGINE_URL}/agents/deploy...`);
     let engineRes: Response;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-      engineRes = await fetch(`${ENGINE_URL}/agents/deploy`, {
+      engineRes = await fetchEngineWithRetry('/agents/deploy', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': authHeader,
         },
         body: JSON.stringify({ agentId, intervalSeconds }),
-        signal: controller.signal,
       });
-      clearTimeout(timeoutId);
       console.log(`[fe-deploy-3-ok] ENGINE response status: ${engineRes.status}`);
     } catch (err: any) {
       console.error('[fe-deploy-3-fail] ENGINE unreachable:', err.message);
@@ -211,7 +234,6 @@ export async function POST(request: NextRequest) {
 }
 
 // ── GET /api/agents/deploy?userAddress=0x... ──────────────────────────────────
-// Proxy for GET /agents/status — returns daemon running status for a user.
 
 export async function GET(request: NextRequest) {
   try {
@@ -222,7 +244,7 @@ export async function GET(request: NextRequest) {
 
     let engineRes: Response;
     try {
-      engineRes = await fetch(`${ENGINE_URL}/agents/status${qs}`, {
+      engineRes = await fetchEngineWithRetry(`/agents/status${qs}`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -241,7 +263,6 @@ export async function GET(request: NextRequest) {
 }
 
 // ── DELETE /api/agents/deploy — stop a daemon ─────────────────────────────────
-// Proxies to POST /agents/stop, forwarding the original Authorization header.
 
 export async function DELETE(request: NextRequest) {
   try {
@@ -252,7 +273,7 @@ export async function DELETE(request: NextRequest) {
 
     let engineRes: Response;
     try {
-      engineRes = await fetch(`${ENGINE_URL}/agents/stop`, {
+      engineRes = await fetchEngineWithRetry('/agents/stop', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

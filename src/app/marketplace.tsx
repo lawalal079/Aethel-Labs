@@ -210,12 +210,30 @@ export default function Marketplace() {
   const [ratingMsg, setRatingMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const fetchRatings = useCallback(async () => {
+    // Restore cached ratings immediately from localStorage
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('aethel_agent_ratings');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && typeof parsed === 'object') {
+            setRatingStats(prev => ({ ...parsed, ...prev }));
+          }
+        }
+      } catch {}
+    }
+
     try {
       const res = await fetch('/api/agents/rate');
       if (!res.ok) return;
       const data = await res.json();
       if (data.ratings) {
         setRatingStats(data.ratings);
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('aethel_agent_ratings', JSON.stringify(data.ratings));
+          } catch {}
+        }
       }
     } catch { /* ignore */ }
   }, []);
@@ -226,8 +244,9 @@ export default function Marketplace() {
   }, [fetchRatings]);
 
   const handleRatingSubmit = async () => {
-    if (!ratingModalAgent || !circle.feeWalletAddress) {
-      setRatingMsg({ type: 'error', text: 'Fee Wallet address not active. Please connect wallet.' });
+    const actingAddress = circle.feeWalletAddress || activeAddress;
+    if (!ratingModalAgent || !actingAddress) {
+      setRatingMsg({ type: 'error', text: 'Wallet not active. Please connect wallet.' });
       return;
     }
     setIsSubmittingRating(true);
@@ -245,7 +264,7 @@ export default function Marketplace() {
         headers,
         body: JSON.stringify({
           agentId: ratingModalAgent.id,
-          userAddress: circle.feeWalletAddress || activeAddress,
+          userAddress: actingAddress,
           rating: selectedStars,
           comment: commentText,
         }),

@@ -1577,8 +1577,18 @@ export default function Workflows() {
 
   const selectedAgent = deployedAgents.find(a => a.id === selectedId) ?? null;
 
-  // Recent non-deployment execution logs for history
-  const historyLogs = executionLogs.slice(0, 20);
+  // Recent execution logs for history — newest first, limit to 6
+  const parseLogTime = (ts: any): number => {
+    if (!ts) return 0;
+    if (typeof ts === 'number') return ts > 1e11 ? ts : ts * 1000;
+    const cleaned = typeof ts === 'string' ? ts.replace(/·/g, ' ') : String(ts);
+    const d = new Date(cleaned);
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+  };
+
+  const historyLogs = [...executionLogs]
+    .sort((a, b) => parseLogTime(b.timestamp) - parseLogTime(a.timestamp))
+    .slice(0, 6);
 
   if (deployedAgents.length === 0) {
     return (

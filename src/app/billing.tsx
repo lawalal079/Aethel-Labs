@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from './context';
 import { useCircleWallet } from './components/providers/CircleWalletProvider';
 import {
-  Download, TrendUp, Receipt, MagnifyingGlass, Cpu, Database,
+  Download, DownloadSimple, TrendUp, Receipt, MagnifyingGlass, Cpu, Database,
   ArrowUpRight, ArrowDownLeft, Spinner, CheckCircle, Warning, Robot,
   CurrencyCircleDollar, Copy, CheckSquare, Clock,
 } from '@phosphor-icons/react';
@@ -84,10 +84,20 @@ export default function Billing() {
   // Copy-to-clipboard state
   const [copiedAddress, setCopiedAddress] = useState(false);
 
+  const parseLogTime = (ts: any): number => {
+    if (!ts) return 0;
+    if (typeof ts === 'number') return ts > 1e11 ? ts : ts * 1000;
+    const cleaned = typeof ts === 'string' ? ts.replace(/·/g, ' ') : String(ts);
+    const d = new Date(cleaned);
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+  };
+
   const isLoadingLogs = executionLogs === undefined || executionLogs === null;
-  const filteredLogs = (executionLogs ?? []).filter((log) =>
-    log.agent_name.toLowerCase().includes(filterQuery.toLowerCase())
-  );
+  const filteredLogs = [...(executionLogs ?? [])]
+    .sort((a, b) => parseLogTime(b.timestamp) - parseLogTime(a.timestamp))
+    .filter((log) =>
+      log.agent_name.toLowerCase().includes(filterQuery.toLowerCase())
+    );
 
   const activeAddress: Address | null = circle.walletAddress as Address | null;
   const gatewayBalance = circle.spendingBalance;
@@ -106,11 +116,13 @@ export default function Billing() {
     const filtered = (executionLogs ?? []).filter(log => {
       if (range === 'all_time') return true;
       try {
-        const logTime = new Date(log.timestamp).getTime();
-        if (isNaN(logTime)) return false;
+        if (!log.timestamp) return true;
+        const cleaned = typeof log.timestamp === 'string' ? log.timestamp.replace(/·/g, ' ') : log.timestamp;
+        const logTime = new Date(cleaned).getTime();
+        if (isNaN(logTime)) return true; // Include if date parsing is ambiguous rather than dropping
         return (now - logTime) <= rangeMs;
       } catch {
-        return false;
+        return true;
       }
     });
 
@@ -118,7 +130,7 @@ export default function Billing() {
     const rows = filtered.map(log => [
       `"${log.timestamp}"`,
       `"${log.tx_type || 'Nanopayment'}"`,
-      `"${log.agent_name || ''}"`,
+      `"${(log.agent_name || '').replace(/_/g, ' ')}"`,
       `"${log.cost_usdc}"`,
       `"${log.status}"`,
       `"${log.tx_hash || ''}"`
@@ -962,10 +974,6 @@ export default function Billing() {
                     // Sum total combined portfolio value in USD using live market prices
                     const totalPortfolioValue = usdcNum + (eurcNum * eurPrice) + (cirbtcNum * btcPrice);
 
-                    const usdcBalStr = holdings.find(h => h.symbol === 'USDC')?.balance || tradingWalletBalance;
-                    const eurcBalStr = holdings.find(h => h.symbol === 'EURC')?.balance || '0.000000';
-                    const cirbtcBalStr = holdings.find(h => h.symbol === 'cirBTC')?.balance || '0.00000000';
-
                     return (
                       <>
                         <p className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider mb-1">
@@ -994,39 +1002,6 @@ export default function Billing() {
                             {copiedAddress ? <CheckSquare size={14} /> : <Copy size={14} />}
                           </button>
                         </div>
-
-                        {/* Multi-Token Holdings Breakdown (USDC, EURC, cirBTC) */}
-                        <div className="mt-4 pt-3 border-t border-[#2A2F35] space-y-2">
-                          <p className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider">
-                            Asset Holdings Breakdown (Arc Testnet)
-                          </p>
-                          <div className="bg-[#0B0B0C] rounded-xl border border-[#2A2F35] overflow-hidden divide-y divide-[#2A2F35]/40 font-mono text-xs">
-                            <div className="flex items-center justify-between p-2.5 hover:bg-[#16191C]/40">
-                              <div className="flex items-center gap-2">
-                                <span className="w-2 h-2 rounded-full bg-blue-400" />
-                                <span className="font-bold text-white">USDC</span>
-                                <span className="text-[10px] text-[#8a8f98]">USD Coin</span>
-                              </div>
-                              <span className="font-bold text-white">{usdcBalStr} USDC</span>
-                            </div>
-                            <div className="flex items-center justify-between p-2.5 hover:bg-[#16191C]/40">
-                              <div className="flex items-center gap-2">
-                                <span className="w-2 h-2 rounded-full bg-indigo-400" />
-                                <span className="font-bold text-white">EURC</span>
-                                <span className="text-[10px] text-[#8a8f98]">Euro Coin</span>
-                              </div>
-                              <span className="font-bold text-indigo-300">{eurcBalStr} EURC</span>
-                            </div>
-                            <div className="flex items-center justify-between p-2.5 hover:bg-[#16191C]/40">
-                              <div className="flex items-center gap-2">
-                                <span className="w-2 h-2 rounded-full bg-amber-400" />
-                                <span className="font-bold text-white">cirBTC</span>
-                                <span className="text-[10px] text-[#8a8f98]">Circle Wrapped BTC</span>
-                              </div>
-                              <span className="font-bold text-amber-300">{cirbtcBalStr} cirBTC</span>
-                            </div>
-                          </div>
-                        </div>
                       </>
                     );
                   })()
@@ -1049,52 +1024,53 @@ export default function Billing() {
             {/* Vertical divider */}
             <div className="hidden md:block bg-[#2A2F35] mx-0" />
 
-            {/* Explanation / Fee Wallet display */}
+            {/* Right Column: Asset Holdings Breakdown */}
             <div className="md:pl-8 flex flex-col justify-between mt-6 md:mt-0">
               <div>
-                <p className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider mb-4">Fee Wallet (Task Fees Float)</p>
-                {isFeeWalletProvisioned ? (
-                  <div className="p-3 bg-[#0B0B0C] rounded-xl border border-[#4E8981]/20 mb-4 space-y-2">
-                    <div className="flex justify-between items-center">
-                      <span className="text-[10px] text-[#8a8f98] font-bold uppercase">Gateway Spendable Float</span>
-                      <span className="text-xs font-mono font-bold text-emerald-400">{gatewayBalance} USDC</span>
-                    </div>
-                    <div className="flex justify-between items-center pt-1 border-t border-[#1A1D20]">
-                      <span className="text-[10px] text-[#8a8f98]">Est. Cycles Remaining</span>
-                      <span className="text-xs font-mono text-white">{Math.floor(parseFloat(gatewayBalance || '0') / 0.0001)} cycles</span>
-                    </div>
-                    <div className="flex items-center gap-1.5 pt-2 border-t border-[#2A2F35]">
-                      <code className="text-[10px] text-[#5fa399] font-mono flex-1 truncate">{shortFwAddress}</code>
-                      <button
-                        onClick={handleCopyFeeAddress}
-                        className="p-1 rounded bg-[#1A1D20] text-[#5fa399] hover:text-white transition-colors"
-                        title="Copy Fee Wallet address"
-                      >
-                        {copiedFeeAddress ? <CheckSquare size={12} /> : <Copy size={12} />}
-                      </button>
-                    </div>
-                  </div>
+                <p className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider mb-3">
+                  Asset Holdings Breakdown (Arc Testnet)
+                </p>
+                {isTradingWalletProvisioned ? (
+                  (() => {
+                    const holdings = circle.tradingWalletHoldings || [];
+                    const usdcBalStr = holdings.find(h => h.symbol === 'USDC')?.balance || tradingWalletBalance;
+                    const eurcBalStr = holdings.find(h => h.symbol === 'EURC')?.balance || '0.000000';
+                    const cirbtcBalStr = holdings.find(h => h.symbol === 'cirBTC')?.balance || '0.00000000';
+
+                    return (
+                      <div className="bg-[#0B0B0C] rounded-xl border border-[#2A2F35] overflow-hidden divide-y divide-[#2A2F35]/40 font-mono text-xs">
+                        <div className="flex items-center justify-between p-3 hover:bg-[#16191C]/40">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-blue-400" />
+                            <span className="font-bold text-white">USDC</span>
+                            <span className="text-[10px] text-[#8a8f98]">USD Coin</span>
+                          </div>
+                          <span className="font-bold text-white">{usdcBalStr} USDC</span>
+                        </div>
+                        <div className="flex items-center justify-between p-3 hover:bg-[#16191C]/40">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-indigo-400" />
+                            <span className="font-bold text-white">EURC</span>
+                            <span className="text-[10px] text-[#8a8f98]">Euro Coin</span>
+                          </div>
+                          <span className="font-bold text-indigo-300">{eurcBalStr} EURC</span>
+                        </div>
+                        <div className="flex items-center justify-between p-3 hover:bg-[#16191C]/40">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-amber-400" />
+                            <span className="font-bold text-white">cirBTC</span>
+                            <span className="text-[10px] text-[#8a8f98]">Circle Wrapped BTC</span>
+                          </div>
+                          <span className="font-bold text-amber-300">{cirbtcBalStr} cirBTC</span>
+                        </div>
+                      </div>
+                    );
+                  })()
                 ) : (
-                  <div className="p-3 bg-[#0B0B0C] rounded-xl border border-dashed border-[#2A2F35] mb-4 text-xs text-[#8a8f98]">
-                    Fee Wallet provisions automatically when an agent is deployed.
+                  <div className="p-4 bg-[#0B0B0C] rounded-xl border border-dashed border-[#2A2F35] text-xs text-[#8a8f98]">
+                    Holdings breakdown will appear once your Trading Wallet is provisioned.
                   </div>
                 )}
-
-                <p className="text-[10px] font-bold text-[#8a8f98] uppercase tracking-wider mb-3">About Platform Wallets</p>
-                <div className="space-y-3">
-                  <div className="flex items-start gap-2.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#4E8981] mt-1.5 flex-shrink-0" />
-                    <p className="text-xs text-[#8a8f98] leading-relaxed">
-                      <span className="text-white font-semibold">Trading Wallet:</span> Holds trading principal for autonomous USDC/EURC swaps.
-                    </p>
-                  </div>
-                  <div className="flex items-start gap-2.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 flex-shrink-0" />
-                    <p className="text-xs text-[#8a8f98] leading-relaxed">
-                      <span className="text-white font-semibold">Fee Wallet:</span> Pays $0.0001 USDC task fee per daemon cycle tick. Completely separate from trading capital.
-                    </p>
-                  </div>
-                </div>
               </div>
             </div>
 
@@ -1393,8 +1369,8 @@ export default function Billing() {
                 </tr>
               )}
 
-              {/* Rows */}
-              {!isLoadingLogs && filteredLogs.map((log) => (
+              {/* Rows — Display up to 6 most recent transactions to keep page compact */}
+              {!isLoadingLogs && filteredLogs.slice(0, 6).map((log) => (
                 <tr key={log.id} className="hover:bg-[#0B0B0C]/20 transition-colors cursor-pointer">
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
@@ -1405,7 +1381,15 @@ export default function Billing() {
                       }`}>
                         {log.status === 'FAILURE' ? <Database size={16} /> : <Cpu size={16} />}
                       </div>
-                      <span className="text-xs text-white font-semibold">{log.agent_name}</span>
+                      <span className="text-xs text-white font-semibold">
+                        {(() => {
+                          const raw = log.agent_name || 'Agent Task';
+                          if (raw.startsWith('0x') && raw.length > 20) {
+                            return `${raw.slice(0, 8)}...${raw.slice(-6)}`;
+                          }
+                          return raw.replace(/_/g, ' ');
+                        })()}
+                      </span>
                     </div>
                   </td>
                   <td className="px-6 py-4">
@@ -1419,7 +1403,19 @@ export default function Billing() {
                       {log.tx_type ?? '—'}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-xs text-[#8a8f98]">{(() => { try { return new Date(log.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return log.timestamp; } })()}</td>
+                  <td className="px-6 py-4 text-xs text-[#8a8f98]">
+                    {(() => {
+                      try {
+                        if (!log.timestamp) return 'Just now';
+                        const cleaned = typeof log.timestamp === 'string' ? log.timestamp.replace(/·/g, ' ') : log.timestamp;
+                        const d = new Date(cleaned);
+                        if (isNaN(d.getTime())) return typeof log.timestamp === 'string' ? log.timestamp : 'Just now';
+                        return d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+                      } catch {
+                        return log.timestamp || 'Just now';
+                      }
+                    })()}
+                  </td>
                   <td className="px-6 py-4">
                     <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
                       log.status === 'SUCCESS'
@@ -1438,6 +1434,21 @@ export default function Billing() {
             </tbody>
           </table>
         </div>
+
+        {/* Footer info note when more transactions exist */}
+        {!isLoadingLogs && filteredLogs.length > 6 && (
+          <div className="flex items-center justify-between px-6 py-3 bg-[#0B0B0C]/60 border-t border-[#2A2F35] text-xs text-[#8a8f98]">
+            <span>
+              Showing <strong className="text-white">6</strong> of <strong className="text-white">{filteredLogs.length}</strong> transactions. Full ledger is preserved in your statement.
+            </span>
+            <button
+              onClick={() => setShowExportModal(true)}
+              className="text-[#4E8981] hover:text-white font-semibold transition-colors cursor-pointer flex items-center gap-1 text-xs"
+            >
+              <DownloadSimple size={14} /> Download Full Statement
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
