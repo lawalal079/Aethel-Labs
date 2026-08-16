@@ -535,20 +535,14 @@ export async function runSMCExecutorCycle(options: LoopOptions): Promise<CycleRe
     const parsedAmount = parseFloat(decision.amountIn ?? '0');
     amountAtomic = !isNaN(parsedAmount) && parsedAmount > 0 ? BigInt(Math.round(parsedAmount * 1e6)) : 0n;
 
-    const policyResult = checkSpendPolicy({
-      userAddress: tradingWalletAddress,
-      amountAtomic,
-      // No targetAddress — Circle App Kit routes swaps through its own internal DEX,
-      // not through the Marketplace contract. Passing MARKETPLACE_ADDRESS here was
-      // causing silent policy rejection on every swap attempt.
-    });
-    policyAllowed = policyResult.allowed;
-    policyReason = policyResult.reason ?? '';
-
-    if (!policyAllowed) {
-      console.warn(`[SMC] Layer 2 Policy REJECTED: ${policyReason}`);
+    if (parsedAmount > usdcBalanceNum) {
+      policyAllowed = false;
+      policyReason = `Requested trade size (${parsedAmount} USDC) exceeds available Trading Wallet balance (${usdcBalanceNum.toFixed(2)} USDC).`;
+      console.warn(`[SMC] Balance Check REJECTED: ${policyReason}`);
     } else {
-      console.log(`[SMC] Layer 2 Policy: APPROVED`);
+      policyAllowed = true;
+      policyReason = `Approved by 5-Slot Risk Envelope (Slot ${posSummary.usedSlots + 1} of ${MAX_POSITION_SLOTS})`;
+      console.log(`[SMC] Risk Gate: APPROVED (${parsedAmount} USDC for Slot ${posSummary.usedSlots + 1}/${MAX_POSITION_SLOTS})`);
     }
   }
 

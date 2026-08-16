@@ -32,15 +32,11 @@ export interface SpendRecord {
 }
 
 // ── Default Policy Configuration ──────────────────────────────────────────────
-// Default limits per user wallet:
-// Per-Tx: 5.00 USDC (5_000_000 atomic units)
-// Daily: 20.00 USDC (20_000_000 atomic units)
-// Weekly: 100.00 USDC (100_000_000 atomic units)
-// Monthly: 300.00 USDC (300_000_000 atomic units)
-const DEFAULT_PER_TX_LIMIT = 5_000_000n;
-const DEFAULT_DAILY_LIMIT = 20_000_000n;
-const DEFAULT_WEEKLY_LIMIT = 100_000_000n;
-const DEFAULT_MONTHLY_LIMIT = 300_000_000n;
+// Default limits set to unlimited (governed strictly by user's Trading Wallet balance & 5-slot risk envelope):
+const DEFAULT_PER_TX_LIMIT = 1_000_000_000_000n; // 1,000,000 USDC
+const DEFAULT_DAILY_LIMIT = 1_000_000_000_000n;  // 1,000,000 USDC
+const DEFAULT_WEEKLY_LIMIT = 1_000_000_000_000n;
+const DEFAULT_MONTHLY_LIMIT = 1_000_000_000_000n;
 
 // In-memory policy overrides per user
 const userPolicies = new Map<string, WalletSpendPolicy>();
